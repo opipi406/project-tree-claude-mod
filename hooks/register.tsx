@@ -241,7 +241,6 @@ async function key($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k'
 async function pickResult($: EngineInterface, rel: string) {
   await update($, query, () => '')
   await reveal($, rel)
-  await mention($, rel)
 }
 
 function openPane($: EngineInterface, isFocused: boolean) {

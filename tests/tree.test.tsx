@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { search } from '../src/fuzzy'
@@ -137,6 +137,37 @@ test('quick open lists matches with the hit characters highlighted', async ($, o
     expect(await ui.find({ type: 'Text', text: /b\.md/ })).toBeUndefined()
     await ui.unmount()
   }
+})
+
+test('picking a quick open result selects the file without inserting @path into the prompt', async ($, on) => {
+  const store = new Map<string, { value: unknown; version: number }>()
+  on('state.get', (_, e, next) => {
+    const { key } = e as { key: string }
+    if (key === 'repo') return { value: { value: REPO, version: 1 } }
+    const held = store.get(key)
+    return held ? { value: held } : next(e)
+  })
+  const picked: unknown[] = []
+  on('state.set', (_, e) => {
+    const { key, value, ifVersion } = e as { key: string; value: unknown; ifVersion?: number }
+    const version = store.get(key)?.version ?? 0
+    if (ifVersion !== undefined && ifVersion !== version) return { value: { isSet: false, version } }
+    store.set(key, { value, version: version + 1 })
+    if (key === 'selected') picked.push(value)
+    return { value: { isSet: true, version: version + 1 } }
+  })
+  const fills: unknown[] = []
+  on('prompt.fill', (_, e) => {
+    fills.push(e)
+    return { isFilled: true }
+  })
+  mock.store(on)
+  store.set('mode', { value: 'find', version: 1 })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.input({ key: 'q', text: 'b.md' })
+  await ui.unmount()
+  expect(picked).toEqual(['b.md'])
+  expect(fills).toEqual([])
 })
 
 test('pressing p while the tree holds the keyboard opens quick open', async ($, on) => {
