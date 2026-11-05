@@ -1,0 +1,8 @@
+{
+  "name": "project-tree",
+  "description": "最寄りのgitリポジトリを起点にしたVSCode風のExplorerペイン（ツリー・クイックオープン・git状態の色分け）",
+  "author": {
+    "name": "opipi406"
+  },
+  "types": "./types/index.d.ts"
+}
