@@ -22,4 +22,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Git
 
 - コミットは Conventional Commits の形式で、件名と本文を日本語で書く（例: `feat: 〜を追加`）。
-- main へ直接コミットしてよい。
+- 作業は `develop/<slug>` ブランチで行い、main へは PR でマージする。main へ直接コミットしない。ブランチ名は `.claude/hooks/check-branch-name.sh`（PreToolUse hook）で強制し、main は GitHub のブランチ保護で PR 必須にしている。
