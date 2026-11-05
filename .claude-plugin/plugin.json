@@ -1,8 +1,24 @@
 {
   "name": "project-tree",
+  "version": "0.1.0",
   "description": "最寄りのgitリポジトリを起点にしたVSCode風のExplorerペイン（ツリー・クイックオープン・git状態の色分け）",
   "author": {
     "name": "opipi406"
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "icons": {
+      "type": "string",
+      "title": "アイコン",
+      "description": "basic: 通常の文字 / nerd: Nerd Font のアイコン（Nerd Font が入ったターミナル向け）",
+      "default": "basic",
+      "options": ["basic", "nerd"]
+    },
+    "autoOpen": {
+      "type": "boolean",
+      "title": "起動時に開く",
+      "description": "セッション開始時に Explorer ペインを自動で開く",
+      "default": false
+    }
+  }
 }

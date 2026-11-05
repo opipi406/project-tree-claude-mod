@@ -11,6 +11,7 @@ import { BOLD, DIM, STRIKE, formatRow } from '../src/view'
 import type { Seg, ViewMessage, ViewProps, ViewRow } from '../src/view'
 
 const PANE = 'project-tree'
+const COMMAND = 'project-tree'
 const TITLE = 'Explorer'
 const ROW_LIMIT = 5000
 const RESULT_LIMIT = 60
@@ -41,7 +42,6 @@ const active = atom({ plugin: 'project-tree', key: 'active' } as const, '')
 const mode = atom({ plugin: 'project-tree', key: 'mode' } as const, 'tree' as ViewMode)
 const query = atom({ plugin: 'project-tree', key: 'query' } as const, '')
 const scrollTop = atom({ plugin: 'project-tree', key: 'scrollTop' } as const, 0)
-const icons = atom({ plugin: 'project-tree', key: 'icons' } as const, 'basic' as IconStyle)
 
 let sessionCwd = ''
 let isScanning = false
@@ -76,10 +76,10 @@ async function refresh($: EngineInterface, isForced = true) {
     const next = await scan((argv, cwd) => $.process.run(argv, { cwd, timeoutMs: 20000 }), sessionCwd)
     const prev = await read($, repo)
     if (prev.root !== '' && isSame(prev, next)) return
-    await update($, repo, old => ({ ...next, rev: old.rev + 1 }))
+    await update($, repo, (old) => ({ ...next, rev: old.rev + 1 }))
     if (prev.root !== next.root) {
       const saved = await $.store.get(`expanded:${next.root}`)
-      if (Array.isArray(saved)) await update($, expanded, () => saved.filter(x => typeof x === 'string'))
+      if (Array.isArray(saved)) await update($, expanded, () => saved.filter((x) => typeof x === 'string'))
     }
   } catch (err) {
     $.ui.log(`project-tree: scan failed: ${String(err)}`)
@@ -103,7 +103,7 @@ async function setExpanded($: EngineInterface, fn: (list: string[]) => string[])
 }
 
 async function toggle($: EngineInterface, dir: string) {
-  await setExpanded($, list => (list.includes(dir) ? list.filter(x => x !== dir) : [...list, dir]))
+  await setExpanded($, (list) => (list.includes(dir) ? list.filter((x) => x !== dir) : [...list, dir]))
 }
 
 async function scrollIntoView($: EngineInterface, path: string) {
@@ -112,9 +112,9 @@ async function scrollIntoView($: EngineInterface, path: string) {
     return
   }
   const rows = await visibleRows($)
-  const at = rows.findIndex(r => r.path === path)
+  const at = rows.findIndex((r) => r.path === path)
   if (at < 0) return
-  await update($, scrollTop, top => (at < top ? at : at >= top + treeRows ? at - treeRows + 1 : top))
+  await update($, scrollTop, (top) => (at < top ? at : at >= top + treeRows ? at - treeRows + 1 : top))
 }
 
 const APP_LOOKUP =
@@ -162,11 +162,11 @@ async function reveal($: EngineInterface, rel: string) {
     return
   }
   await update($, mode, () => 'tree')
-  await setExpanded($, list => [...new Set([...list, ...ancestors(rel)])])
+  await setExpanded($, (list) => [...new Set([...list, ...ancestors(rel)])])
   await update($, selected, () => rel)
   if (!drawsOwnWindow) await $.clock.sleep(120)
   const rows = await visibleRows($)
-  const at = rows.findIndex(r => r.path === rel)
+  const at = rows.findIndex((r) => r.path === rel)
   if (drawsOwnWindow && at >= 0) await update($, scrollTop, () => Math.max(0, at - Math.floor(treeRows / 2)))
   else await scrollIntoView($, rel)
 }
@@ -190,7 +190,7 @@ async function revealInFinder($: EngineInterface, rel: string) {
 
 async function click($: EngineInterface, path: string, isDouble: boolean) {
   const rows = await visibleRows($)
-  const row = rows.find(r => r.path === path)
+  const row = rows.find((r) => r.path === path)
   if (!row) return
   await update($, selected, () => path)
   if (row.kind === 'dir') {
@@ -212,7 +212,7 @@ async function key($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k'
   const rows = await visibleRows($)
   if (rows.length === 0) return
   const sel = await read($, selected)
-  const at = rows.findIndex(r => r.path === sel)
+  const at = rows.findIndex((r) => r.path === sel)
   const row = rows[at]
   if (k === 'up') return select($, rows[Math.max(0, at - 1)]?.path ?? '')
   if (k === 'down') return select($, rows[Math.min(rows.length - 1, at + 1)]?.path ?? '')
@@ -244,11 +244,8 @@ async function pickResult($: EngineInterface, rel: string) {
   await mention($, rel)
 }
 
-async function openPane($: EngineInterface, isFocused: boolean) {
-  const saved = await $.store.get('width')
-  const columns = typeof saved === 'number' ? saved : undefined
-
-  return $.ui.open({ id: PANE, title: TITLE, ...(isFocused ? { focus: true as const } : {}), ...(columns ? { columns } : {}) })
+function openPane($: EngineInterface, isFocused: boolean) {
+  return $.ui.open({ id: PANE, title: TITLE, ...(isFocused ? { focus: true as const } : {}) })
 }
 
 async function openFind($: EngineInterface, initial: string) {
@@ -259,65 +256,35 @@ async function openFind($: EngineInterface, initial: string) {
   if (moved.deny) $.ui.log(`project-tree: search focus refused: ${moved.deny}`)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const style: IconStyle = options.icons === 'nerd' ? 'nerd' : 'basic'
+  const opensOnStart = options.autoOpen === true
+
   on('session.start', async ($, e, next) => {
     sessionCwd = e.cwd
-    const saved = await $.store.get('icons')
-    if (saved === 'nerd' || saved === 'basic') await update($, icons, () => saved)
-    await $.command.register({
-      name: 'tree',
-      description: 'Open the Explorer pane (args: refresh | collapse | reveal | width <cols> | icons nerd|basic)',
-      argumentHint: '[refresh|collapse|reveal|width <cols>|icons nerd|basic]',
-    })
-    await $.command.register({ name: 'tree-find', description: 'Quick open a file in the Explorer', argumentHint: '[query]' })
+    await $.command.register({ name: COMMAND, description: '最寄りのgitリポジトリのExplorerペインを開く' })
     await refresh($)
     $.clock.every(POLL_MS, () => void refresh($, false))
-    void openPane($, false)
+    if (opensOnStart) void openPane($, false)
 
     return next(e)
   })
 
-  on('command.run', { command: 'tree' }, async ($, e) => {
-    const [verb, arg] = e.args.trim().split(/\s+/)
-    if (verb === 'refresh') {
-      await refresh($)
-      return { text: 'Explorer refreshed.' }
-    }
-    if (verb === 'collapse') {
-      await setExpanded($, () => [])
-      return { text: 'Collapsed all folders.' }
-    }
-    if (verb === 'reveal') {
-      await reveal($, await read($, active))
-      return { text: 'Revealed the active file.' }
-    }
-    if (verb === 'width') {
-      const columns = Number(arg)
-      if (!Number.isInteger(columns) || columns < 24) return { text: '使い方: /tree width <24以上の列数>' }
-      await $.store.set('width', columns)
-      const opened = await openPane($, true)
-      return { text: opened.isPlaced ? `Explorer の幅を ${columns} 列に設定しました（上限はターミナル幅の45%）。` : `Explorer を開けませんでした: ${opened.reason}` }
-    }
-    if (verb === 'icons' && (arg === 'nerd' || arg === 'basic')) {
-      await update($, icons, () => arg)
-      await $.store.set('icons', arg)
-      return { text: `Icons: ${arg}` }
-    }
+  on('command.run', { command: COMMAND }, async ($) => {
     const opened = await openPane($, true)
 
-    return { text: opened.isPlaced ? 'Explorer opened.' : `Explorer could not open: ${opened.reason}` }
-  })
-
-  on('command.run', { command: 'tree-find' }, async ($, e) => {
-    await openFind($, e.args.trim())
-
-    return { text: 'Quick open.' }
+    return { text: opened.isPlaced ? 'Explorer を開きました。' : `Explorer を開けませんでした: ${opened.reason}` }
   })
 
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     const args = e as unknown as { file_path?: unknown; notebook_path?: unknown }
-    const target = typeof args.file_path === 'string' ? args.file_path : typeof args.notebook_path === 'string' ? args.notebook_path : undefined
+    const target =
+      typeof args.file_path === 'string'
+        ? args.file_path
+        : typeof args.notebook_path === 'string'
+          ? args.notebook_path
+          : undefined
     if (target !== undefined && ['Read', 'Edit', 'Write', 'NotebookEdit'].includes(e.tool)) {
       const { root } = await read($, repo)
       const abs = target.startsWith('/') ? target : `${sessionCwd}/${target}`
@@ -331,7 +298,7 @@ export const register: Register = on => {
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     if (!drawsOwnWindow || (await read($, mode)) === 'find') return next(e)
     const total = (await visibleRows($)).length
-    await update($, scrollTop, top => Math.max(0, Math.min(top + e.by, total - treeRows)))
+    await update($, scrollTop, (top) => Math.max(0, Math.min(top + e.by, total - treeRows)))
 
     return {}
   })
@@ -360,13 +327,14 @@ export const register: Register = on => {
     const view = await read($, mode)
     const sel = await read($, selected)
     const act = await read($, active)
-    const style = await read($, icons)
 
     if (snap.root === '') return <Text dimColor> Scanning…</Text>
 
     const { index, dirCodes } = indexOf(snap)
     const changes = Object.keys(snap.status).length
-    const sync = [snap.ahead > 0 ? `↑${snap.ahead}` : '', snap.behind > 0 ? `↓${snap.behind}` : ''].filter(Boolean).join(' ')
+    const sync = [snap.ahead > 0 ? `↑${snap.ahead}` : '', snap.behind > 0 ? `↓${snap.behind}` : '']
+      .filter(Boolean)
+      .join(' ')
     const segText = (segs: Seg[], bg?: string) =>
       segs.map(([text, color, flags]) => (
         <Text
@@ -382,14 +350,20 @@ export const register: Register = on => {
 
     const header = (
       <Box flexDirection="column">
-        <Text dimColor bold>{' EXPLORER'}</Text>
+        <Text dimColor bold>
+          {' EXPLORER'}
+        </Text>
         <Text bold>{' ' + clip(snap.name.toUpperCase(), cols - 2)}</Text>
       </Box>
     )
     const status = (
       <Box flexDirection="row" justifyContent="space-between">
         <Text>
-          {snap.isGit ? <Text color={BRANCH_COLOR}>{' ⎇ ' + clip(snap.branch, 24)}</Text> : <Text dimColor> no git</Text>}
+          {snap.isGit ? (
+            <Text color={BRANCH_COLOR}>{' ⎇ ' + clip(snap.branch, 24)}</Text>
+          ) : (
+            <Text dimColor> no git</Text>
+          )}
           {sync ? <Text color={BRANCH_COLOR}>{' ' + sync}</Text> : ''}
           {changes > 0 ? <Text color={GIT_COLORS.M}>{`  ● ${changes}`}</Text> : ''}
         </Text>
@@ -420,7 +394,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Text dimColor>{'─'.repeat(cols)}</Text>
         {status}
-        {toolLines.map(line => (
+        {toolLines.map((line) => (
           <Box flexDirection="row" columnGap={2} paddingLeft={1}>
             {line.map(([k, hotkey, label, onPress]) => (
               <Button key={k} plain hotkey={hotkey} onPress={onPress}>
@@ -447,13 +421,13 @@ export const register: Register = on => {
             submitLabel="開く"
             value={q}
             autoFocus
-            onInput={v => void update($, query, () => v)}
-            onSubmit={v => {
+            onInput={(v) => void update($, query, () => v)}
+            onSubmit={(v) => {
               const top = search(snap.files, v, 1)[0]
               if (top) void pickResult($, top.path)
             }}
           />
-          {results.map(m => {
+          {results.map((m) => {
             const nameAt = m.path.lastIndexOf('/') + 1
             const hits = new Set(m.hits)
             const icon = fileIcon(basename(m.path), style)
@@ -468,8 +442,16 @@ export const register: Register = on => {
                 else parts.push({ text: ch, isHit })
               }
 
-              return parts.map(p =>
-                p.isHit ? <Text bold color={HIT_COLOR}>{p.text}</Text> : <Text color={color} dimColor={isDim}>{p.text}</Text>,
+              return parts.map((p) =>
+                p.isHit ? (
+                  <Text bold color={HIT_COLOR}>
+                    {p.text}
+                  </Text>
+                ) : (
+                  <Text color={color} dimColor={isDim}>
+                    {p.text}
+                  </Text>
+                ),
               )
             }
 
@@ -479,7 +461,7 @@ export const register: Register = on => {
                 <Text color={icon.color}>{icon.glyph}</Text>
                 <Text> </Text>
                 {runs(nameAt, m.path.length, code ? GIT_COLORS[code] : undefined, false)}
-                <Text>  </Text>
+                <Text> </Text>
                 {runs(0, Math.max(0, nameAt - 1), undefined, true)}
               </Button>
             )
@@ -513,7 +495,12 @@ export const register: Register = on => {
       treeRows = treeRowsNow
       const isFinding = view === 'find'
       const top = Math.max(0, Math.min(await read($, scrollTop), rows.length - treeRows))
-      const props: ViewProps = { rows: rows.slice(top, top + treeRows).map(toView), cols, height: treeRows, ...(isFinding ? { dim: true as const } : {}) }
+      const props: ViewProps = {
+        rows: rows.slice(top, top + treeRows).map(toView),
+        cols,
+        height: treeRows,
+        ...(isFinding ? { dim: true as const } : {}),
+      }
 
       return (
         <Box flexDirection="column" height={bodyRows}>
@@ -555,7 +542,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {header}
-        {rows.map(row => {
+        {rows.map((row) => {
           const v = toView(row)
 
           return (

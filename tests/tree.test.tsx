@@ -14,12 +14,12 @@ test('porcelain -z: rename consumes its source path, codes map to badges', async
 test('single-child folders are compacted and folders sort before files', async () => {
   const index = buildIndex(['z.md', 'a/b/c/x.ts', 'a/b/c/y.ts', 'docs/readme.md'])
   const rows = flatten(index, new Set(['a/b/c']), 100)
-  expect(rows.map(r => `${r.depth}:${r.label}`)).toEqual(['0:a/b/c', '1:x.ts', '1:y.ts', '0:docs', '0:z.md'])
+  expect(rows.map((r) => `${r.depth}:${r.label}`)).toEqual(['0:a/b/c', '1:x.ts', '1:y.ts', '0:docs', '0:z.md'])
 })
 
 test('tree connectors continue a parent line only while the parent has later siblings', async () => {
   const rows = flatten(buildIndex(['src/a.ts', 'src/b.ts', 'z.md']), new Set(['src']), 100)
-  const lead = rows.map(r => formatRow(r, { code: undefined, style: 'basic', cols: 40, isActive: false })[0]?.[0])
+  const lead = rows.map((r) => formatRow(r, { code: undefined, style: 'basic', cols: 40, isActive: false })[0]?.[0])
   expect(lead).toEqual([' ├─ ', ' │  ├─ ', ' │  └─ ', ' └─ '])
 })
 
@@ -32,10 +32,31 @@ const PANE = {
   plugin: 'project-tree',
   component: 'Pane',
   requestId: 'project-tree',
-  props: { title: 'Explorer', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+  props: {
+    title: 'Explorer',
+    isFocused: false,
+    bodyColumns: 40,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 30 },
+    view: {},
+  },
 } as const
 
-const REPO = { shape: 'repo-1', value: { root: '/r', name: 'r', isGit: true, branch: 'main', ahead: 1, behind: 0, files: ['src/a.ts', 'b.md'], status: { 'src/a.ts': 'M' }, isTruncated: false, rev: 1 } }
+const REPO = {
+  shape: 'repo-1',
+  value: {
+    root: '/r',
+    name: 'r',
+    isGit: true,
+    branch: 'main',
+    ahead: 1,
+    behind: 0,
+    files: ['src/a.ts', 'b.md'],
+    status: { 'src/a.ts': 'M' },
+    isTruncated: false,
+    rev: 1,
+  },
+}
 
 function seed(on: On, values: Record<string, unknown>) {
   on('state.get', (_, e, next) => {
@@ -87,7 +108,21 @@ test('right click then "Copy Relative Path" copies the project-relative path', a
 
 test('quick open lists matches with the hit characters highlighted', async ($, on) => {
   const values: Record<string, unknown> = {
-    repo: { shape: 'repo-1', value: { root: '/r', name: 'r', isGit: true, branch: 'main', ahead: 0, behind: 0, files: ['src/register.tsx', 'b.md'], status: {}, isTruncated: false, rev: 1 } },
+    repo: {
+      shape: 'repo-1',
+      value: {
+        root: '/r',
+        name: 'r',
+        isGit: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        files: ['src/register.tsx', 'b.md'],
+        status: {},
+        isTruncated: false,
+        rev: 1,
+      },
+    },
     mode: 'find',
     query: 'reg',
   }
@@ -145,7 +180,9 @@ test('vim keys move the selection: j down, G to the last row, gg back to the fir
     if ((e as { key: string }).key === 'selected') picks.push((e as { value: unknown }).value)
     return next(e)
   })
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', () => ({
+    value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.key({ key: 'j' })
   await ui.key({ key: 'j' })
@@ -155,3 +192,15 @@ test('vim keys move the selection: j down, G to the last row, gg back to the fir
   expect(picks).toEqual(['src', 'b.md', 'src', 'b.md'])
   await ui.unmount()
 })
+
+test(
+  'the icons option set to nerd draws Nerd Font glyphs instead of letter tags',
+  { options: { icons: 'nerd' } },
+  async ($, on) => {
+    seed(on, { repo: REPO, expanded: { shape: 'expanded-1', value: ['src'] } })
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    expect(await ui.find({ type: 'Text', text: ' ' })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: 'TS' })).toBeUndefined()
+    await ui.unmount()
+  },
+)

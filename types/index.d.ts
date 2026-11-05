@@ -27,7 +27,6 @@ declare module 'claude-code' {
       mode: ViewMode
       query: string
       scrollTop: number
-      icons: IconStyle
     }
   }
 }

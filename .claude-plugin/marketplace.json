@@ -1,0 +1,15 @@
+{
+  "name": "project-tree-claude-mod",
+  "owner": {
+    "name": "opipi406"
+  },
+  "metadata": {
+    "description": "VSCode風のExplorerペインを追加するClaude Code mod"
+  },
+  "plugins": [
+    {
+      "name": "project-tree",
+      "source": "./"
+    }
+  ]
+}
