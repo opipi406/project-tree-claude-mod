@@ -119,5 +119,5 @@ export function flatten(index: Index, expanded: Set<string>, limit: number): Row
 }
 
 export function allDirs(index: Index): string[] {
-  return [...index.keys()].filter(dir => dir !== '')
+  return [...index.keys()].filter((dir) => dir !== '')
 }

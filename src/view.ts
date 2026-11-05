@@ -21,7 +21,24 @@ export type ViewMessage =
   | { t: 'menu'; p: string }
   | { t: 'close-find' }
   | { t: 'copy-abs' | 'copy-rel' | 'mention' | 'open' | 'finder'; p: string }
-  | { t: 'key'; k: 'up' | 'down' | 'left' | 'right' | 'enter' | 'find' | 'home' | 'end' | 'pageup' | 'pagedown' | 'open' | 'collapse' | 'expand' | 'refresh' }
+  | {
+      t: 'key'
+      k:
+        | 'up'
+        | 'down'
+        | 'left'
+        | 'right'
+        | 'enter'
+        | 'find'
+        | 'home'
+        | 'end'
+        | 'pageup'
+        | 'pagedown'
+        | 'open'
+        | 'collapse'
+        | 'expand'
+        | 'refresh'
+    }
 
 export function formatRow(
   row: Row,

@@ -2,7 +2,12 @@ export type Match = { path: string; score: number; hits: number[] }
 
 const SEPARATORS = '/._- '
 
-function subsequence(text: string, lower: string, query: string, from: number): { score: number; hits: number[] } | undefined {
+function subsequence(
+  text: string,
+  lower: string,
+  query: string,
+  from: number,
+): { score: number; hits: number[] } | undefined {
   const hits: number[] = []
   let score = 0
   let at = from
@@ -13,7 +18,12 @@ function subsequence(text: string, lower: string, query: string, from: number): 
     if (prev !== undefined && found === prev + 1) score += 6
     const before = text[found - 1]
     if (found === from || (before !== undefined && SEPARATORS.includes(before))) score += 8
-    else if (before !== undefined && before === before.toLowerCase() && text.charAt(found) !== text.charAt(found).toLowerCase()) score += 6
+    else if (
+      before !== undefined &&
+      before === before.toLowerCase() &&
+      text.charAt(found) !== text.charAt(found).toLowerCase()
+    )
+      score += 6
     score -= Math.min(found - at, 10) * 0.2
     hits.push(found)
     at = found + 1

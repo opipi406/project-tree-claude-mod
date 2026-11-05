@@ -64,25 +64,79 @@ const BY_NAME: Record<string, Kind> = {
 }
 
 const BY_EXT: Record<string, Kind> = {
-  ts: TS, mts: TS, cts: TS, 'd.ts': TS,
-  tsx: REACT, jsx: REACT,
-  js: JS, mjs: JS, cjs: JS,
-  py: PY, pyi: PY, ipynb: PY,
-  go: GO, rs: RS, java: JAVA, kt: KT, kts: KT, rb: RB, php: PHP,
-  html: HTML, htm: HTML, css: CSS, scss: SASS, sass: SASS, less: CSS,
-  json: JSON_, jsonc: JSON_, json5: JSON_,
-  md: MD, mdx: MD,
-  yml: CONF, yaml: CONF, toml: CONF, ini: CONF, conf: CONF, cfg: CONF, properties: CONF,
-  sh: SH, bash: SH, zsh: SH, fish: SH,
-  sql: SQL, db: SQL, sqlite: SQL,
-  png: IMG, jpg: IMG, jpeg: IMG, gif: IMG, webp: IMG, svg: IMG, ico: IMG, bmp: IMG,
+  ts: TS,
+  mts: TS,
+  cts: TS,
+  'd.ts': TS,
+  tsx: REACT,
+  jsx: REACT,
+  js: JS,
+  mjs: JS,
+  cjs: JS,
+  py: PY,
+  pyi: PY,
+  ipynb: PY,
+  go: GO,
+  rs: RS,
+  java: JAVA,
+  kt: KT,
+  kts: KT,
+  rb: RB,
+  php: PHP,
+  html: HTML,
+  htm: HTML,
+  css: CSS,
+  scss: SASS,
+  sass: SASS,
+  less: CSS,
+  json: JSON_,
+  jsonc: JSON_,
+  json5: JSON_,
+  md: MD,
+  mdx: MD,
+  yml: CONF,
+  yaml: CONF,
+  toml: CONF,
+  ini: CONF,
+  conf: CONF,
+  cfg: CONF,
+  properties: CONF,
+  sh: SH,
+  bash: SH,
+  zsh: SH,
+  fish: SH,
+  sql: SQL,
+  db: SQL,
+  sqlite: SQL,
+  png: IMG,
+  jpg: IMG,
+  jpeg: IMG,
+  gif: IMG,
+  webp: IMG,
+  svg: IMG,
+  ico: IMG,
+  bmp: IMG,
   lock: LOCK,
   env: ENV,
-  c: C, h: C, cpp: CPP, cc: CPP, hpp: CPP, cs: CS, swift: SWIFT,
-  vue: VUE, svelte: SVELTE,
-  xml: XML, xlsx: ZIP, pdf: PDF,
-  zip: ZIP, gz: ZIP, tar: ZIP, tgz: ZIP,
-  txt: TEXT, log: TEXT, csv: TEXT,
+  c: C,
+  h: C,
+  cpp: CPP,
+  cc: CPP,
+  hpp: CPP,
+  cs: CS,
+  swift: SWIFT,
+  vue: VUE,
+  svelte: SVELTE,
+  xml: XML,
+  xlsx: ZIP,
+  pdf: PDF,
+  zip: ZIP,
+  gz: ZIP,
+  tar: ZIP,
+  tgz: ZIP,
+  txt: TEXT,
+  log: TEXT,
+  csv: TEXT,
 }
 
 function kindOf(name: string): Kind {
@@ -141,12 +195,22 @@ export const GIT_COLORS: Record<GitCode, string> = {
   '!': '#e4676b',
 }
 
-
 export function width(text: string): number {
   let n = 0
   for (const ch of text) {
     const cp = ch.codePointAt(0) ?? 0
-    n += cp >= 0x1100 && (cp <= 0x115f || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff)) ? 2 : 1
+    n +=
+      cp >= 0x1100 &&
+      (cp <= 0x115f ||
+        (cp >= 0x2e80 && cp <= 0xa4cf) ||
+        (cp >= 0xac00 && cp <= 0xd7a3) ||
+        (cp >= 0xf900 && cp <= 0xfaff) ||
+        (cp >= 0xfe30 && cp <= 0xfe4f) ||
+        (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) ||
+        (cp >= 0x1f300 && cp <= 0x1faff))
+        ? 2
+        : 1
   }
 
   return n

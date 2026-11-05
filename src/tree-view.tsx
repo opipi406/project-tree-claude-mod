@@ -39,7 +39,12 @@ const VIM: Record<string, Move> = { j: 'down', k: 'up', h: 'left', l: 'right', G
 
 const VIM_CTRL: Record<string, Move> = { d: 'pagedown', u: 'pageup', f: 'pagedown', b: 'pageup', n: 'down' }
 
-const VIM_Z: Record<string, 'collapse' | 'expand' | 'left' | 'right'> = { M: 'collapse', R: 'expand', c: 'left', o: 'right' }
+const VIM_Z: Record<string, 'collapse' | 'expand' | 'left' | 'right'> = {
+  M: 'collapse',
+  R: 'expand',
+  c: 'left',
+  o: 'right',
+}
 
 const KEYS: Record<string, Move | 'enter'> = {
   up: 'up',
@@ -67,9 +72,10 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
   const itemAt = (x: number, y: number): number =>
     pos && x >= pos.left && x < pos.left + MENU_W && y > pos.top && y < pos.top + MENU_H - 1 ? y - pos.top - 1 : -1
 
-  surface.onPointer(ev => {
+  surface.onPointer((ev) => {
     if (ev.type === 'leave') {
-      if (st.hover !== undefined || st.menuHover !== undefined) surface.setState({ ...st, hover: undefined, menuHover: undefined })
+      if (st.hover !== undefined || st.menuHover !== undefined)
+        surface.setState({ ...st, hover: undefined, menuHover: undefined })
       return
     }
     if (ev.type === 'move' && ev.button === undefined) {
@@ -106,7 +112,7 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
     send({ t: 'click', p: row.p, dbl })
   })
 
-  surface.onKey(ev => {
+  surface.onKey((ev) => {
     if (menu) {
       surface.setState({ ...st, menu: undefined })
       return
@@ -180,7 +186,9 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
         >
           {ITEMS.map(([id, label], i) =>
             id === '-' ? (
-              <Text dimColor backgroundColor={MENU_BG}>{'─'.repeat(MENU_W - 2)}</Text>
+              <Text dimColor backgroundColor={MENU_BG}>
+                {'─'.repeat(MENU_W - 2)}
+              </Text>
             ) : (
               <Text backgroundColor={i === st.menuHover ? MENU_HOVER_BG : MENU_BG}>
                 {(' ' + label).padEnd(MENU_W - 2, ' ')}

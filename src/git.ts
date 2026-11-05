@@ -1,9 +1,6 @@
 import type { GitCode, RepoSnapshot } from '../types'
 
-export type Runner = (
-  argv: string[],
-  cwd: string,
-) => Promise<{ exitCode: number; stdout: string }>
+export type Runner = (argv: string[], cwd: string) => Promise<{ exitCode: number; stdout: string }>
 
 export type Scan = Omit<RepoSnapshot, 'rev'>
 
@@ -49,13 +46,26 @@ function lastSegment(path: string): string {
 
 async function scanPlain(run: Runner, cwd: string): Promise<Scan> {
   const found = await run(
-    ['find', '.', '-maxdepth', '4', '(', ...PRUNED.flatMap((n, i) => (i === 0 ? ['-name', n] : ['-o', '-name', n])), ')', '-prune', '-o', '-type', 'f', '-print'],
+    [
+      'find',
+      '.',
+      '-maxdepth',
+      '4',
+      '(',
+      ...PRUNED.flatMap((n, i) => (i === 0 ? ['-name', n] : ['-o', '-name', n])),
+      ')',
+      '-prune',
+      '-o',
+      '-type',
+      'f',
+      '-print',
+    ],
     cwd,
   )
   const all = found.stdout
     .split('\n')
     .filter(Boolean)
-    .map(p => p.replace(/^\.\//, ''))
+    .map((p) => p.replace(/^\.\//, ''))
 
   return {
     root: cwd,
