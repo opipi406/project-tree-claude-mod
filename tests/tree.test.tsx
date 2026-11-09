@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { Engine, On } from 'claude-code'
 
 import { search } from '../src/fuzzy'
 import { parseStatus } from '../src/git'
@@ -235,3 +235,48 @@ test(
     await ui.unmount()
   },
 )
+
+const GIT_TIMEOUT = '$.process.run(git) aborted: still running after 20000ms'
+
+async function startSession($: Engine, on: On) {
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', () => ({ value: undefined }))
+  const logs: string[] = []
+  on('ui.log', (_, e) => {
+    logs.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+
+  return logs
+}
+
+test('a scan that keeps timing out logs the failure once, then the recovery once', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  let isDown = true
+  on('process.run', () => {
+    if (isDown) throw new Error(GIT_TIMEOUT)
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const logs = await startSession($, on)
+  for (let i = 0; i < 3; i++) await clock.advance(5000)
+  isDown = false
+  await clock.advance(5000)
+  await clock.advance(5000)
+  expect(logs.length).toBe(2)
+  expect(logs[0]).toContain('scan failed')
+  expect(logs[1]).toContain('scan recovered')
+})
+
+test('a scan cut short by the machine sleeping logs nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('process.run', async () => {
+    await clock.sleep(600_000)
+    throw new Error(GIT_TIMEOUT)
+  })
+  const started = startSession($, on)
+  await clock.settle()
+  await clock.advance(600_000)
+  expect(await started).toEqual([])
+})
