@@ -17,6 +17,8 @@ const ROW_LIMIT = 5000
 const RESULT_LIMIT = 60
 const POLL_MS = 5000
 const PLAIN_POLL_MS = 60000
+const SCAN_TIMEOUT_MS = 20000
+const SLEPT_SCAN_MS = SCAN_TIMEOUT_MS * 3
 const HEAD_ROWS = 2
 const POPUP_BG = '#24272e'
 const HIT_COLOR = '#18a3ff'
@@ -45,6 +47,7 @@ const scrollTop = atom({ plugin: 'project-tree', key: 'scrollTop' } as const, 0)
 
 let sessionCwd = ''
 let isScanning = false
+let isFailing = false
 let lastPlainScanAt = 0
 let pending: { cancel: () => void } | undefined
 let cached: { rev: number; root: string; index: Index; dirCodes: Map<string, GitCode> } | undefined
@@ -73,7 +76,9 @@ async function refresh($: EngineInterface, isForced = true) {
   isScanning = true
   lastPlainScanAt = now
   try {
-    const next = await scan((argv, cwd) => $.process.run(argv, { cwd, timeoutMs: 20000 }), sessionCwd)
+    const next = await scan((argv, cwd) => $.process.run(argv, { cwd, timeoutMs: SCAN_TIMEOUT_MS }), sessionCwd)
+    if (isFailing) $.ui.log('project-tree: scan recovered')
+    isFailing = false
     const prev = await read($, repo)
     if (prev.root !== '' && isSame(prev, next)) return
     await update($, repo, (old) => ({ ...next, rev: old.rev + 1 }))
@@ -82,7 +87,9 @@ async function refresh($: EngineInterface, isForced = true) {
       if (Array.isArray(saved)) await update($, expanded, () => saved.filter((x) => typeof x === 'string'))
     }
   } catch (err) {
-    $.ui.log(`project-tree: scan failed: ${String(err)}`)
+    const hasSlept = (await $.clock.now()) - now > SLEPT_SCAN_MS
+    if (!hasSlept && !isFailing) $.ui.log(`project-tree: scan failed: ${String(err)}`)
+    if (!hasSlept) isFailing = true
   } finally {
     isScanning = false
   }
