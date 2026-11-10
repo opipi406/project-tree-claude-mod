@@ -8,7 +8,7 @@ import { GIT_COLORS, clip, fileIcon, width } from '../src/icons'
 import { allDirs, ancestors, basename, buildIndex, dirStatuses, flatten } from '../src/tree'
 import type { Index, Row } from '../src/tree'
 import { BOLD, DIM, STRIKE, formatRow } from '../src/view'
-import type { Seg, ViewMessage, ViewProps, ViewRow } from '../src/view'
+import type { PreviewView, Seg, ViewMessage, ViewProps, ViewRow } from '../src/view'
 
 const PANE = 'project-tree'
 const COMMAND = 'project-tree'
@@ -334,6 +334,12 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async ($) => {
+    await update($, mode, () => 'tree')
+    await update($, query, () => '')
+    await update($, previewPath, () => '')
+    await update($, previewTop, () => 0)
+    await update($, selected, () => '')
+    await update($, scrollTop, () => 0)
     const opened = await openPane($, true)
 
     return { text: opened.isPlaced ? 'Explorer を開きました。' : `Explorer を開けませんでした: ${opened.reason}` }
@@ -573,13 +579,20 @@ export const register: Register = (on, options) => {
           <Text dimColor>{range + ' '}</Text>
         </Box>
       )
-      const body = file.error ? (
-        <Text dimColor>{' ' + file.error}</Text>
-      ) : (
-        <Code source={source} path={rel} startLine={top + 1} wrap="truncate-end" />
+      const data: PreviewView = { path: rel, source, startLine: top + 1, ...(file.error ? { error: file.error } : {}) }
+      const actions = (
+        <Box flexDirection="row" columnGap={2} paddingLeft={1}>
+          <Button key="close-preview" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
+            閉じる
+          </Button>
+          <Button key="open-preview" plain onPress={() => void openWithDefaultApp($, rel)}>
+            O: アプリで開く
+          </Button>
+          {height !== undefined && <Text dimColor>j/k スクロール</Text>}
+        </Box>
       )
 
-      return { title, body }
+      return { title, data, actions }
     }
 
     const rows = flatten(index, new Set(await read($, expanded)), ROW_LIMIT)
@@ -603,19 +616,16 @@ export const register: Register = (on, options) => {
 
       if (view === 'preview') {
         previewRows = Math.max(1, bodyRows - 2)
-        const { title, body } = await previewPanel(previewRows)
-        const props: ViewProps = { rows: [], cols, height: previewRows, covered: true }
+        const { title, data, actions } = await previewPanel(previewRows)
+        const props: ViewProps = { rows: [], cols, height: previewRows, preview: data }
 
         return (
           <Box flexDirection="column" height={bodyRows}>
             {title}
             <Box height={previewRows} width={cols}>
               <Client key="tree" module="../src/tree-view.tsx" props={props} height={previewRows} width={cols} />
-              <Box position="absolute" top={0} left={0} width={cols} height={previewRows} flexDirection="column">
-                {body}
-              </Box>
             </Box>
-            <Text dimColor>{clip(' j/k スクロール · O アプリで開く · o/q 閉じる', cols)}</Text>
+            {actions}
           </Box>
         )
       }
@@ -654,20 +664,17 @@ export const register: Register = (on, options) => {
     drawsOwnWindow = false
 
     if (view === 'preview') {
-      const { title, body } = await previewPanel(undefined)
+      const { title, data, actions } = await previewPanel(undefined)
 
       return (
         <Box flexDirection="column">
           {title}
-          {body}
-          <Box flexDirection="row" columnGap={2} paddingLeft={1}>
-            <Button key="close-preview" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
-              閉じる
-            </Button>
-            <Button key="open-preview" plain onPress={() => void openWithDefaultApp($, sel)}>
-              O: アプリで開く
-            </Button>
-          </Box>
+          {data.error ? (
+            <Text dimColor>{' ' + data.error}</Text>
+          ) : (
+            <Code source={data.source} path={data.path} startLine={1} wrap="truncate-end" />
+          )}
+          {actions}
         </Box>
       )
     }

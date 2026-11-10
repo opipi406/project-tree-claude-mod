@@ -14,7 +14,9 @@ export type Seg = [string, string | null, number]
 
 export type ViewRow = { p: string; s: Seg[]; sel?: true }
 
-export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true; covered?: true }
+export type PreviewView = { path: string; source: string; startLine: number; error?: string }
+
+export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true; preview?: PreviewView }
 
 export type ViewMessage =
   | { t: 'click'; p: string; dbl: boolean }

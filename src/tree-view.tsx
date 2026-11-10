@@ -62,7 +62,7 @@ const KEYS: Record<string, Move | 'enter'> = {
 }
 
 const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
-  const { Box, Text } = surface.elements
+  const { Box, Text, Code } = surface.elements
   const st: Local = surface.state ?? {}
   const send = (m: ViewMessage) => surface.post(m)
   const menu = st.menu
@@ -76,7 +76,7 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
     pos && x >= pos.left && x < pos.left + MENU_W && y > pos.top && y < pos.top + MENU_H - 1 ? y - pos.top - 1 : -1
 
   surface.onPointer((ev) => {
-    if (props.covered) return
+    if (props.preview) return
     if (ev.type === 'leave') {
       if (st.hover !== undefined || st.menuHover !== undefined)
         surface.setState({ ...st, hover: undefined, menuHover: undefined })
@@ -155,6 +155,19 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
     const k = KEYS[ev.key]
     if (k) send({ t: 'key', k })
   })
+
+  const preview = props.preview
+  if (preview) {
+    return (
+      <Box flexDirection="column" width={props.cols} height={props.height}>
+        {preview.error ? (
+          <Text dimColor>{' ' + preview.error}</Text>
+        ) : (
+          <Code source={preview.source} path={preview.path} startLine={preview.startLine} wrap="truncate-end" />
+        )}
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column" width={props.cols} height={props.height}>

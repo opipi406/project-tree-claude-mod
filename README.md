@@ -50,6 +50,8 @@ claude plugin install project-tree@project-tree-claude-mod
 /project-tree
 ```
 
+コマンドで開くたびに、プレビュー・検索・選択・スクロール位置を初期状態に戻す（フォルダの開閉は保持）。
+
 `autoOpen` を有効にすると、セッション開始時に自動で開く。
 
 ### Mouse
