@@ -13,7 +13,9 @@ export type RepoSnapshot = {
   rev: number
 }
 
-export type ViewMode = 'tree' | 'find' | 'preview'
+export type ViewMode = 'tree' | 'find' | 'preview' | 'git' | 'git-diff'
+
+export type GitFocus = 'graph' | 'files' | 'diff'
 
 export type IconStyle = 'basic' | 'nerd'
 
@@ -29,6 +31,11 @@ declare module 'claude-code' {
       scrollTop: number
       previewPath: string
       previewTop: number
+      gitCommit: string
+      gitFile: string
+      gitFocus: GitFocus
+      gitTop: number
+      gitDiffTop: number
     }
   }
 }

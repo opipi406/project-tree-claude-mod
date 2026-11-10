@@ -5,7 +5,7 @@ import type { ViewMessage, ViewProps } from './view'
 
 type Menu = { x: number; y: number; p: string }
 
-type Local = { hover?: number; menu?: Menu; menuHover?: number; last?: { p: string; at: number }; prefix?: 'g' | 'z' }
+type Local = { hover?: number; menu?: Menu; menuHover?: number; last?: { p: string; at: number }; prefix?: 'z' }
 
 const ITEMS = [
   ['copy-abs', 'Copy Path'],
@@ -25,7 +25,7 @@ const HOVER_BG = '#2a2d2e'
 const MENU_BG = '#252526'
 const MENU_HOVER_BG = '#04395e'
 
-const LETTERS: Record<string, 'find' | 'preview' | 'open' | 'close' | 'collapse' | 'expand' | 'refresh'> = {
+const LETTERS: Record<string, 'find' | 'preview' | 'open' | 'close' | 'collapse' | 'expand' | 'refresh' | 'git'> = {
   p: 'find',
   '/': 'find',
   o: 'preview',
@@ -34,11 +34,12 @@ const LETTERS: Record<string, 'find' | 'preview' | 'open' | 'close' | 'collapse'
   c: 'collapse',
   x: 'expand',
   r: 'refresh',
+  g: 'git',
 }
 
 type Move = 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pageup' | 'pagedown'
 
-const VIM: Record<string, Move> = { j: 'down', k: 'up', h: 'left', l: 'right', G: 'end' }
+const VIM: Record<string, Move> = { j: 'down', k: 'up', h: 'left', l: 'right' }
 
 const VIM_CTRL: Record<string, Move> = { d: 'pagedown', u: 'pageup', f: 'pagedown', b: 'pageup', n: 'down' }
 
@@ -47,6 +48,25 @@ const VIM_Z: Record<string, 'collapse' | 'expand' | 'left' | 'right'> = {
   R: 'expand',
   c: 'left',
   o: 'right',
+}
+
+type GitKey = Extract<ViewMessage, { t: 'key' }>['k']
+
+const GIT_LETTERS: Record<string, GitKey> = {
+  j: 'down',
+  k: 'up',
+  h: 'left',
+  l: 'right',
+  n: 'next',
+  p: 'prev',
+  J: 'next-commit',
+  K: 'prev-commit',
+  q: 'close',
+  g: 'git',
+  r: 'refresh',
+  tab: 'tab',
+  ' ': 'space',
+  space: 'space',
 }
 
 const KEYS: Record<string, Move | 'enter'> = {
@@ -77,6 +97,17 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
 
   surface.onPointer((ev) => {
     if (props.preview) return
+    if (props.git) {
+      if (ev.type === 'leave') {
+        if (st.hover !== undefined) surface.setState({ ...st, hover: undefined })
+      } else if (ev.type === 'move' && ev.button === undefined) {
+        if (ev.y !== st.hover) surface.setState({ ...st, hover: ev.y })
+      } else if (ev.type === 'down' && ev.button === 'left') {
+        const p = props.rows[ev.y]?.p
+        if (p) send({ t: 'click', p, dbl: false })
+      }
+      return
+    }
     if (ev.type === 'leave') {
       if (st.hover !== undefined || st.menuHover !== undefined)
         surface.setState({ ...st, hover: undefined, menuHover: undefined })
@@ -122,11 +153,16 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
       return
     }
     const key = ev.shift && ev.key.length === 1 ? ev.key.toUpperCase() : ev.key
+    if (props.git) {
+      const ctrl = ev.ctrl ? VIM_CTRL[ev.key] : undefined
+      const k = ctrl ?? (!ev.ctrl && !ev.meta ? GIT_LETTERS[key] : undefined) ?? KEYS[ev.key]
+      if (k) send({ t: 'key', k })
+      return
+    }
     if (st.prefix) {
       surface.setState({ ...st, prefix: undefined })
-      const z = st.prefix === 'z' ? VIM_Z[key] : undefined
-      if (st.prefix === 'g' && key === 'g') send({ t: 'key', k: 'home' })
-      else if (z) send({ t: 'key', k: z })
+      const z = VIM_Z[key]
+      if (z) send({ t: 'key', k: z })
       return
     }
     if (ev.key === 'p' && (ev.meta || ev.ctrl)) {
@@ -138,7 +174,7 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
       send({ t: 'key', k: ctrlMove })
       return
     }
-    if (!ev.ctrl && !ev.meta && (key === 'g' || key === 'z')) {
+    if (!ev.ctrl && !ev.meta && key === 'z') {
       surface.setState({ ...st, prefix: key })
       return
     }
@@ -180,14 +216,15 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
   return (
     <Box flexDirection="column" width={props.cols} height={props.height}>
       {props.rows.map((row, y) => {
-        const bg = row.sel ? SELECTED_BG : y === st.hover && !menu ? HOVER_BG : undefined
+        const hover = y === st.hover && !menu && (!props.git || row.p !== '')
+        const bg = row.sel ? SELECTED_BG : (row.bg ?? (hover ? HOVER_BG : undefined))
 
         return (
           <Box flexDirection="row">
-            {row.s.map(([text, color, flags]) => (
+            {row.s.map(([text, color, flags, segBg]) => (
               <Text
                 color={props.dim && color !== GUIDE_COLOR ? MUTED_COLOR : (color ?? undefined)}
-                backgroundColor={bg}
+                backgroundColor={segBg ?? bg}
                 bold={(flags & BOLD) !== 0}
                 dimColor={!props.dim && (flags & DIM) !== 0}
                 strikethrough={(flags & STRIKE) !== 0}

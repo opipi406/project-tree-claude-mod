@@ -323,10 +323,11 @@ export function highlightLine(text: string, lang: string | undefined, state: HlS
 export function fit(segs: Seg[], room: number): Seg[] {
   const out: Seg[] = []
   let used = 0
-  for (const [text, color, flags] of segs) {
+  for (const seg of segs) {
+    const [text, color, flags, bg] = seg
     const w = width(text)
     if (used + w <= room) {
-      out.push([text, color, flags])
+      out.push(seg)
       used += w
       continue
     }
@@ -337,7 +338,7 @@ export function fit(segs: Seg[], room: number): Seg[] {
       cut += ch
       used += cw
     }
-    out.push([cut + '…', color, flags])
+    out.push(bg === undefined ? [cut + '…', color, flags] : [cut + '…', color, flags, bg])
     break
   }
 

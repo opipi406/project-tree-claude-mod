@@ -10,13 +10,20 @@ export const STRIKE = 4
 export const GUIDE_COLOR = '#3e4148'
 export const MUTED_COLOR = '#5c6370'
 
-export type Seg = [string, string | null, number]
+export type Seg = [string, string | null, number, string?]
 
-export type ViewRow = { p: string; s: Seg[]; sel?: true }
+export type ViewRow = { p: string; s: Seg[]; sel?: true; bg?: string }
 
 export type PreviewView = { lines: Seg[][]; error?: string }
 
-export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true; preview?: PreviewView }
+export type ViewProps = {
+  rows: ViewRow[]
+  cols: number
+  height: number
+  dim?: true
+  preview?: PreviewView
+  git?: true
+}
 
 export type ViewMessage =
   | { t: 'click'; p: string; dbl: boolean }
@@ -42,6 +49,13 @@ export type ViewMessage =
         | 'collapse'
         | 'expand'
         | 'refresh'
+        | 'git'
+        | 'tab'
+        | 'space'
+        | 'next'
+        | 'prev'
+        | 'next-commit'
+        | 'prev-commit'
     }
 
 export function formatRow(
