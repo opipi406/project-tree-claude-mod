@@ -12,6 +12,7 @@ const ITEMS = [
   ['copy-rel', 'Copy Relative Path'],
   ['-', ''],
   ['mention', 'Add to Prompt (@)'],
+  ['preview', 'Preview'],
   ['open', 'Open with Default App'],
   ['finder', 'Reveal in Finder'],
 ] as const
@@ -24,10 +25,12 @@ const HOVER_BG = '#2a2d2e'
 const MENU_BG = '#252526'
 const MENU_HOVER_BG = '#04395e'
 
-const LETTERS: Record<string, 'find' | 'open' | 'collapse' | 'expand' | 'refresh'> = {
+const LETTERS: Record<string, 'find' | 'preview' | 'open' | 'close' | 'collapse' | 'expand' | 'refresh'> = {
   p: 'find',
   '/': 'find',
-  o: 'open',
+  o: 'preview',
+  O: 'open',
+  q: 'close',
   c: 'collapse',
   x: 'expand',
   r: 'refresh',
@@ -73,6 +76,7 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
     pos && x >= pos.left && x < pos.left + MENU_W && y > pos.top && y < pos.top + MENU_H - 1 ? y - pos.top - 1 : -1
 
   surface.onPointer((ev) => {
+    if (props.covered) return
     if (ev.type === 'leave') {
       if (st.hover !== undefined || st.menuHover !== undefined)
         surface.setState({ ...st, hover: undefined, menuHover: undefined })
@@ -143,7 +147,7 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
       send({ t: 'key', k: vim })
       return
     }
-    const letter = LETTERS[ev.key]
+    const letter = LETTERS[key]
     if (letter && !ev.ctrl && !ev.meta) {
       send({ t: 'key', k: letter })
       return

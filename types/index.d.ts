@@ -13,7 +13,7 @@ export type RepoSnapshot = {
   rev: number
 }
 
-export type ViewMode = 'tree' | 'find'
+export type ViewMode = 'tree' | 'find' | 'preview'
 
 export type IconStyle = 'basic' | 'nerd'
 
@@ -27,6 +27,8 @@ declare module 'claude-code' {
       mode: ViewMode
       query: string
       scrollTop: number
+      previewPath: string
+      previewTop: number
     }
   }
 }

@@ -14,13 +14,13 @@ export type Seg = [string, string | null, number]
 
 export type ViewRow = { p: string; s: Seg[]; sel?: true }
 
-export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true }
+export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true; covered?: true }
 
 export type ViewMessage =
   | { t: 'click'; p: string; dbl: boolean }
   | { t: 'menu'; p: string }
   | { t: 'close-find' }
-  | { t: 'copy-abs' | 'copy-rel' | 'mention' | 'open' | 'finder'; p: string }
+  | { t: 'copy-abs' | 'copy-rel' | 'mention' | 'preview' | 'open' | 'finder'; p: string }
   | {
       t: 'key'
       k:
@@ -34,7 +34,9 @@ export type ViewMessage =
         | 'end'
         | 'pageup'
         | 'pagedown'
+        | 'preview'
         | 'open'
+        | 'close'
         | 'collapse'
         | 'expand'
         | 'refresh'

@@ -23,6 +23,7 @@ const HEAD_ROWS = 2
 const POPUP_BG = '#24272e'
 const HIT_COLOR = '#18a3ff'
 const BRANCH_COLOR = '#8fbcbb'
+const PREVIEW_CHARS = 100000
 
 const EMPTY: RepoSnapshot = {
   root: '',
@@ -44,6 +45,8 @@ const active = atom({ plugin: 'project-tree', key: 'active' } as const, '')
 const mode = atom({ plugin: 'project-tree', key: 'mode' } as const, 'tree' as ViewMode)
 const query = atom({ plugin: 'project-tree', key: 'query' } as const, '')
 const scrollTop = atom({ plugin: 'project-tree', key: 'scrollTop' } as const, 0)
+const previewPath = atom({ plugin: 'project-tree', key: 'previewPath' } as const, '')
+const previewTop = atom({ plugin: 'project-tree', key: 'previewTop' } as const, 0)
 
 let sessionCwd = ''
 let isScanning = false
@@ -52,6 +55,8 @@ let lastPlainScanAt = 0
 let pending: { cancel: () => void } | undefined
 let cached: { rev: number; root: string; index: Index; dirCodes: Map<string, GitCode> } | undefined
 let treeRows = 20
+let previewRows = 20
+let loaded: { path: string; mtimeMs: number; lines: string[]; error?: string } | undefined
 let drawsOwnWindow = false
 
 function indexOf(snap: RepoSnapshot) {
@@ -190,6 +195,55 @@ async function openWithDefaultApp($: EngineInterface, rel: string) {
   $.ui.toast(opened?.exitCode === 0 ? `${app} で開きました: ${basename(rel)}` : `開けませんでした: ${basename(rel)}`)
 }
 
+async function loadPreview($: EngineInterface, abs: string) {
+  const info = await $.fs.stat(abs).catch(() => undefined)
+  if (loaded?.path === abs && loaded.mtimeMs === info?.mtimeMs) return loaded
+  const fail = (error: string) => (loaded = { path: abs, mtimeMs: info?.mtimeMs ?? 0, lines: [], error })
+  if (!info) return fail('ファイルが見つかりません')
+  const text = await $.fs.read(abs).catch((err: unknown) => err)
+  if (typeof text !== 'string') return fail(`読み込めませんでした: ${String(text)}`)
+  if (text.includes('\0')) return fail('バイナリファイルのため表示できません')
+  loaded = {
+    path: abs,
+    mtimeMs: info.mtimeMs,
+    lines: text
+      .replace(/\p{Cc}/gu, (c) => (c === '\t' || c === '\n' ? c : ''))
+      .replace(/\n$/, '')
+      .split('\n'),
+  }
+
+  return loaded
+}
+
+async function openPreview($: EngineInterface, rel: string) {
+  const snap = await read($, repo)
+  if (!snap.files.includes(rel)) {
+    $.ui.toast(rel === '' ? 'ファイルを選択してください' : 'フォルダはプレビューできません')
+    return
+  }
+  await update($, previewPath, () => rel)
+  await update($, previewTop, () => 0)
+  await update($, mode, () => 'preview')
+}
+
+async function scrollPreview($: EngineInterface, to: (top: number, total: number) => number) {
+  const { root } = await read($, repo)
+  const total = (await loadPreview($, absolute(root, await read($, previewPath)))).lines.length
+  await update($, previewTop, (top) => Math.max(0, Math.min(to(top, total), total - previewRows)))
+}
+
+async function previewKey($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k']) {
+  const half = Math.max(1, Math.floor(previewRows / 2))
+  if (k === 'preview' || k === 'close') return update($, mode, () => 'tree')
+  if (k === 'open') return openWithDefaultApp($, await read($, previewPath))
+  if (k === 'down') return scrollPreview($, (top) => top + 1)
+  if (k === 'up') return scrollPreview($, (top) => top - 1)
+  if (k === 'pagedown') return scrollPreview($, (top) => top + half)
+  if (k === 'pageup') return scrollPreview($, (top) => top - half)
+  if (k === 'home') return scrollPreview($, () => 0)
+  if (k === 'end') return scrollPreview($, (_, total) => total)
+}
+
 async function revealInFinder($: EngineInterface, rel: string) {
   const { root } = await read($, repo)
   await $.process.run(['open', '-R', absolute(root, rel)], { timeoutMs: 10000 }).catch(() => undefined)
@@ -208,8 +262,11 @@ async function click($: EngineInterface, path: string, isDouble: boolean) {
 }
 
 async function key($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k']) {
+  if ((await read($, mode)) === 'preview') return previewKey($, k)
   if (k === 'find') return openFind($, '')
+  if (k === 'preview') return openPreview($, await read($, selected))
   if (k === 'open') return openWithDefaultApp($, await read($, selected))
+  if (k === 'close') return
   if (k === 'collapse') return setExpanded($, () => [])
   if (k === 'refresh') return refresh($)
   if (k === 'expand') {
@@ -297,12 +354,18 @@ export const register: Register = (on, options) => {
       if (root !== '' && abs.startsWith(root + '/')) await update($, active, () => abs.slice(root.length + 1))
     }
     if (['Edit', 'Write', 'NotebookEdit', 'Bash'].includes(e.tool)) scheduleRefresh($)
+    if (e.tool !== 'Read' && (await read($, mode)) === 'preview') $.ui.invalidate('ui.render')
 
     return result
   })
 
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    if (!drawsOwnWindow || (await read($, mode)) === 'find') return next(e)
+    const view = await read($, mode)
+    if (!drawsOwnWindow || view === 'find') return next(e)
+    if (view === 'preview') {
+      await scrollPreview($, (top) => top + e.by)
+      return {}
+    }
     const total = (await visibleRows($)).length
     await update($, scrollTop, (top) => Math.max(0, Math.min(top + e.by, total - treeRows)))
 
@@ -317,6 +380,7 @@ export const register: Register = (on, options) => {
     else if (m.t === 'close-find') await update($, mode, () => 'tree')
     else if (m.t === 'copy-abs' || m.t === 'copy-rel') await copyPath($, m.p, m.t === 'copy-abs')
     else if (m.t === 'mention') await mention($, m.p)
+    else if (m.t === 'preview') await openPreview($, m.p)
     else if (m.t === 'open') await openWithDefaultApp($, m.p)
     else if (m.t === 'finder') await revealInFinder($, m.p)
     else if (m.t === 'key') await key($, m.k)
@@ -326,7 +390,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const els = $.ui.resolve(e)
-    const { Box, Text, Button, Input } = els
+    const { Box, Text, Button, Input, Code } = els
     const cols = Math.max(24, e.props.bodyColumns ?? 40)
     const bodyRows = e.props.scroll?.bodyRows ?? 30
     const snap = await read($, repo)
@@ -378,7 +442,8 @@ export const register: Register = (on, options) => {
     )
     const tools: [string, string, string, () => void][] = [
       ['find', 'p', '検索', () => void openFind($, '')],
-      ['open', 'o', 'アプリで開く', () => void openWithDefaultApp($, sel)],
+      ['preview', 'o', 'プレビュー', () => void openPreview($, sel)],
+      ['open', 'O', 'アプリで開く', () => void openWithDefaultApp($, sel)],
       ['collapse', 'c', 'すべて閉じる', () => void setExpanded($, () => [])],
       ['expand', 'x', 'すべて開く', () => void setExpanded($, () => allDirs(index))],
       ['refresh', 'r', '更新', () => void refresh($)],
@@ -402,11 +467,17 @@ export const register: Register = (on, options) => {
         {status}
         {toolLines.map((line) => (
           <Box flexDirection="row" columnGap={2} paddingLeft={1}>
-            {line.map(([k, hotkey, label, onPress]) => (
-              <Button key={k} plain hotkey={hotkey} onPress={onPress}>
-                {label}
-              </Button>
-            ))}
+            {line.map(([k, hotkey, label, onPress]) =>
+              hotkey === hotkey.toLowerCase() ? (
+                <Button key={k} plain hotkey={hotkey} onPress={onPress}>
+                  {label}
+                </Button>
+              ) : (
+                <Button key={k} plain onPress={onPress}>
+                  {`${hotkey}: ${label}`}
+                </Button>
+              ),
+            )}
           </Box>
         ))}
       </Box>
@@ -483,6 +554,34 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const previewPanel = async (height: number | undefined) => {
+      const rel = await read($, previewPath)
+      const file = await loadPreview($, absolute(snap.root, rel))
+      const total = file.lines.length
+      const top = height === undefined ? 0 : Math.max(0, Math.min(await read($, previewTop), total - height))
+      let source = ''
+      let shown = 0
+      for (const line of file.lines.slice(top, height === undefined ? undefined : top + height)) {
+        if (source.length + line.length + 1 > PREVIEW_CHARS) break
+        source += (shown > 0 ? '\n' : '') + line
+        shown++
+      }
+      const range = total === 0 ? '0/0' : `${top + 1}-${top + shown}/${total}`
+      const title = (
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text bold>{' ' + clip(rel, Math.max(8, cols - width(range) - 3))}</Text>
+          <Text dimColor>{range + ' '}</Text>
+        </Box>
+      )
+      const body = file.error ? (
+        <Text dimColor>{' ' + file.error}</Text>
+      ) : (
+        <Code source={source} path={rel} startLine={top + 1} wrap="truncate-end" />
+      )
+
+      return { title, body }
+    }
+
     const rows = flatten(index, new Set(await read($, expanded)), ROW_LIMIT)
     const toView = (row: Row): ViewRow => ({
       p: row.path,
@@ -501,6 +600,25 @@ export const register: Register = (on, options) => {
       treeRows = treeRowsNow
       const isFinding = view === 'find'
       const top = Math.max(0, Math.min(await read($, scrollTop), rows.length - treeRows))
+
+      if (view === 'preview') {
+        previewRows = Math.max(1, bodyRows - 2)
+        const { title, body } = await previewPanel(previewRows)
+        const props: ViewProps = { rows: [], cols, height: previewRows, covered: true }
+
+        return (
+          <Box flexDirection="column" height={bodyRows}>
+            {title}
+            <Box height={previewRows} width={cols}>
+              <Client key="tree" module="../src/tree-view.tsx" props={props} height={previewRows} width={cols} />
+              <Box position="absolute" top={0} left={0} width={cols} height={previewRows} flexDirection="column">
+                {body}
+              </Box>
+            </Box>
+            <Text dimColor>{clip(' j/k スクロール · O アプリで開く · o/q 閉じる', cols)}</Text>
+          </Box>
+        )
+      }
       const props: ViewProps = {
         rows: rows.slice(top, top + treeRows).map(toView),
         cols,
@@ -534,6 +652,25 @@ export const register: Register = (on, options) => {
     }
 
     drawsOwnWindow = false
+
+    if (view === 'preview') {
+      const { title, body } = await previewPanel(undefined)
+
+      return (
+        <Box flexDirection="column">
+          {title}
+          {body}
+          <Box flexDirection="row" columnGap={2} paddingLeft={1}>
+            <Button key="close-preview" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
+              閉じる
+            </Button>
+            <Button key="open-preview" plain onPress={() => void openWithDefaultApp($, sel)}>
+              O: アプリで開く
+            </Button>
+          </Box>
+        </Box>
+      )
+    }
 
     if (view === 'find') {
       return (

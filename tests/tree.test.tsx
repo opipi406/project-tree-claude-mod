@@ -184,7 +184,25 @@ test('pressing p while the tree holds the keyboard opens quick open', async ($, 
   await ui.unmount()
 })
 
-test('pressing o opens the selected file with its default app and names that app', async ($, on) => {
+test('pressing o previews the selected file over the tree: highlighted by its path, j scrolls, q closes', async ($, on) => {
+  seed(on, { repo: REPO, selected: 'src/a.ts' })
+  const lines = Array.from({ length: 40 }, (_, i) => `const v${i + 1} = ${i + 1}`)
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 1, isLink: false } }))
+  on('fs.read', (_, e) => ({ value: e.path === '/r/src/a.ts' ? lines.join('\n') + '\n' : '' }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.key({ key: 'o' })
+  const code = await ui.find({ type: 'Code' })
+  expect(code?.props).toMatchObject({ path: 'src/a.ts', startLine: 1 })
+  expect(String(code?.props.source).split('\n')[0]).toBe('const v1 = 1')
+  expect(await ui.find({ type: 'Text', text: /^1-28\/40 $/ })).toBeTruthy()
+  await ui.key({ key: 'j' })
+  expect((await ui.find({ type: 'Code' }))?.props.startLine).toBe(2)
+  await ui.key({ key: 'q' })
+  expect(await ui.find({ type: 'Code' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('pressing O opens the selected file with its default app and names that app', async ($, on) => {
   seed(on, { repo: REPO, selected: 'b.md' })
   const runs: string[][] = []
   on('process.run', (_, e) => {
@@ -198,7 +216,7 @@ test('pressing o opens the selected file with its default app and names that app
     return { value: undefined }
   })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.key({ key: 'o' })
+  await ui.key({ key: 'O', shift: true })
   expect(runs).toContainEqual(['open', '/r/b.md'])
   expect(toasts.join()).toContain('Cursor で開きました: b.md')
   await ui.unmount()
