@@ -9,7 +9,8 @@
   "plugins": [
     {
       "name": "project-tree",
-      "source": "./"
+      "source": "./",
+      "version": "2026.11.10.01"
     }
   ]
 }
