@@ -22,4 +22,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Git
 
 - コミットは Conventional Commits の形式で、件名と本文を日本語で書く（例: `feat: 〜を追加`）。
+- `hooks/` `src/` `types/` `.claude-plugin/plugin.json` を変更したら、`.claude-plugin/marketplace.json` の `version` を `YYYY.MM.DD.NN`（当日の連番）で上げる。上げないと `/plugin` の update で配布されない。`plugin.json` には `version` を書かない（marketplace.json より優先されるため）。どちらも pre-commit の `scripts/check-version.mjs` で強制している。
 - 作業は `develop/<slug>` ブランチで行い、main へは PR でマージする。main へ直接コミットしない。ブランチ名は `.claude/hooks/check-branch-name.sh`（PreToolUse hook）で強制し、main は GitHub のブランチ保護で PR 必須にしている。

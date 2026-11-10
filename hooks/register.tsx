@@ -1,13 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { GitCode, IconStyle, RepoSnapshot, ViewMode } from '../types'
+import type { GitCode, GitFocus, IconStyle, RepoSnapshot, ViewMode } from '../types'
 import { isSame, scan } from '../src/git'
+import { EMPTY_TREE, LOG_FORMAT, WORKTREE, parseChanges, parseDiff, parseLog, withWorktree } from '../src/gitlog'
+import type { Commit, DiffLine, FileChange, LogRow } from '../src/gitlog'
+import { commitRow, detailRows, diffHeader, diffRows, diffRule, fileRow, graphWidth } from '../src/git-view'
+import type { CommitDetail } from '../src/git-view'
 import { search } from '../src/fuzzy'
+import { fit, highlightLine, langOf } from '../src/highlight'
+import type { HlState } from '../src/highlight'
 import { GIT_COLORS, clip, fileIcon, width } from '../src/icons'
 import { allDirs, ancestors, basename, buildIndex, dirStatuses, flatten } from '../src/tree'
 import type { Index, Row } from '../src/tree'
-import { BOLD, DIM, STRIKE, formatRow } from '../src/view'
+import { BOLD, DIM, GUIDE_COLOR, MUTED_COLOR, STRIKE, formatRow } from '../src/view'
 import type { PreviewView, Seg, ViewMessage, ViewProps, ViewRow } from '../src/view'
 
 const PANE = 'project-tree'
@@ -24,6 +30,11 @@ const POPUP_BG = '#24272e'
 const HIT_COLOR = '#18a3ff'
 const BRANCH_COLOR = '#8fbcbb'
 const PREVIEW_CHARS = 100000
+const LOG_LIMIT = 500
+const DIFF_LIMIT = 5000
+const CACHE_LIMIT = 50
+const FALLBACK_COMMITS = 200
+const COMBINED_MIN_ROWS = 24
 
 const EMPTY: RepoSnapshot = {
   root: '',
@@ -47,6 +58,11 @@ const query = atom({ plugin: 'project-tree', key: 'query' } as const, '')
 const scrollTop = atom({ plugin: 'project-tree', key: 'scrollTop' } as const, 0)
 const previewPath = atom({ plugin: 'project-tree', key: 'previewPath' } as const, '')
 const previewTop = atom({ plugin: 'project-tree', key: 'previewTop' } as const, 0)
+const gitCommit = atom({ plugin: 'project-tree', key: 'gitCommit' } as const, '')
+const gitFile = atom({ plugin: 'project-tree', key: 'gitFile' } as const, '')
+const gitFocus = atom({ plugin: 'project-tree', key: 'gitFocus' } as const, 'graph' as GitFocus)
+const gitTop = atom({ plugin: 'project-tree', key: 'gitTop' } as const, 0)
+const gitDiffTop = atom({ plugin: 'project-tree', key: 'gitDiffTop' } as const, 0)
 
 let sessionCwd = ''
 let isScanning = false
@@ -56,8 +72,18 @@ let pending: { cancel: () => void } | undefined
 let cached: { rev: number; root: string; index: Index; dirCodes: Map<string, GitCode> } | undefined
 let treeRows = 20
 let previewRows = 20
-let loaded: { path: string; mtimeMs: number; lines: string[]; error?: string } | undefined
+let loaded: { path: string; mtimeMs: number; lines: string[]; states: HlState[]; error?: string } | undefined
 let drawsOwnWindow = false
+let logCache: { root: string; rev: number; rows: LogRow[] } | undefined
+const details = new Map<string, CommitDetail>()
+const diffs = new Map<string, DiffLine[]>()
+let drawnDiff: { key: string; cols: number; rows: ViewRow[] } | undefined
+let graphRows = 10
+let diffBodyRows = 20
+let fileRows = 5
+let isSplit = false
+let worktreeGen = 0
+let worktreeDetail: { gen: number; detail: CommitDetail } | undefined
 
 function indexOf(snap: RepoSnapshot) {
   if (!cached || cached.rev !== snap.rev || cached.root !== snap.root) {
@@ -84,6 +110,8 @@ async function refresh($: EngineInterface, isForced = true) {
     const next = await scan((argv, cwd) => $.process.run(argv, { cwd, timeoutMs: SCAN_TIMEOUT_MS }), sessionCwd)
     if (isFailing) $.ui.log('project-tree: scan recovered')
     isFailing = false
+    worktreeGen++
+    if (isGitView(await read($, mode))) $.ui.invalidate('ui.render')
     const prev = await read($, repo)
     if (prev.root !== '' && isSame(prev, next)) return
     await update($, repo, (old) => ({ ...next, rev: old.rev + 1 }))
@@ -198,7 +226,7 @@ async function openWithDefaultApp($: EngineInterface, rel: string) {
 async function loadPreview($: EngineInterface, abs: string) {
   const info = await $.fs.stat(abs).catch(() => undefined)
   if (loaded?.path === abs && loaded.mtimeMs === info?.mtimeMs) return loaded
-  const fail = (error: string) => (loaded = { path: abs, mtimeMs: info?.mtimeMs ?? 0, lines: [], error })
+  const fail = (error: string) => (loaded = { path: abs, mtimeMs: info?.mtimeMs ?? 0, lines: [], states: [], error })
   if (!info) return fail('ファイルが見つかりません')
   const text = await $.fs.read(abs).catch((err: unknown) => err)
   if (typeof text !== 'string') return fail(`読み込めませんでした: ${String(text)}`)
@@ -206,6 +234,7 @@ async function loadPreview($: EngineInterface, abs: string) {
   loaded = {
     path: abs,
     mtimeMs: info.mtimeMs,
+    states: [undefined],
     lines: text
       .replace(/\p{Cc}/gu, (c) => (c === '\t' || c === '\n' ? c : ''))
       .replace(/\n$/, '')
@@ -262,7 +291,10 @@ async function click($: EngineInterface, path: string, isDouble: boolean) {
 }
 
 async function key($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k']) {
-  if ((await read($, mode)) === 'preview') return previewKey($, k)
+  const view = await read($, mode)
+  if (view === 'preview') return previewKey($, k)
+  if (isGitView(view)) return gitKey($, k)
+  if (k === 'git') return update($, mode, () => 'git')
   if (k === 'find') return openFind($, '')
   if (k === 'preview') return openPreview($, await read($, selected))
   if (k === 'open') return openWithDefaultApp($, await read($, selected))
@@ -307,6 +339,353 @@ async function pickResult($: EngineInterface, rel: string) {
   await reveal($, rel)
 }
 
+const isGitView = (view: ViewMode) => view === 'git' || view === 'git-diff'
+
+function remember<T>(map: Map<string, T>, key: string, value: T) {
+  map.set(key, value)
+  const oldest = map.keys().next().value
+  if (map.size > CACHE_LIMIT && oldest !== undefined) map.delete(oldest)
+}
+
+async function git($: EngineInterface, root: string, args: string[]): Promise<string | undefined> {
+  const r = await $.process.run(['git', ...args], { cwd: root, timeoutMs: SCAN_TIMEOUT_MS }).catch(() => undefined)
+
+  return r?.exitCode === 0 ? r.stdout : undefined
+}
+
+async function loadLog($: EngineInterface): Promise<LogRow[]> {
+  const snap = await read($, repo)
+  if (!snap.isGit) return []
+  if (logCache?.root === snap.root && logCache.rev === snap.rev) return logCache.rows
+  const out = await git($, snap.root, [
+    'log',
+    '--graph',
+    '--all',
+    '--date-order',
+    '--decorate=full',
+    `-n${LOG_LIMIT}`,
+    `--format=${LOG_FORMAT}`,
+  ])
+  const rows = out === undefined ? [] : withWorktree(parseLog(out), Object.keys(snap.status).length > 0)
+  logCache = { root: snap.root, rev: snap.rev, rows }
+
+  return rows
+}
+
+const commitsOf = (rows: LogRow[]) => rows.flatMap((r) => (r.commit ? [r.commit] : []))
+
+async function currentCommit($: EngineInterface, rows: LogRow[]): Promise<Commit | undefined> {
+  const list = commitsOf(rows)
+  const hash = await read($, gitCommit)
+
+  return list.find((c) => c.hash === hash) ?? list[0]
+}
+
+async function loadWorktreeDetail($: EngineInterface): Promise<CommitDetail> {
+  if (worktreeDetail?.gen === worktreeGen) return worktreeDetail.detail
+  const snap = await read($, repo)
+  const [names, nums] = await Promise.all([
+    git($, snap.root, ['diff', '-M', '--name-status', '-z', 'HEAD']),
+    git($, snap.root, ['diff', '-M', '--numstat', '-z', 'HEAD']),
+  ])
+  const untracked = Object.entries(snap.status)
+    .filter(([, code]) => code === 'U')
+    .map(([path]): FileChange => ({ status: '?', path, added: 0, deleted: 0, isBinary: false }))
+  const detail: CommitDetail = { date: '', body: [], files: [...parseChanges(names ?? '', nums ?? ''), ...untracked] }
+  worktreeDetail = { gen: worktreeGen, detail }
+
+  return detail
+}
+
+async function loadDetail($: EngineInterface, c: Commit): Promise<CommitDetail> {
+  if (c.hash === WORKTREE) return loadWorktreeDetail($)
+  const known = details.get(c.hash)
+  if (known) return known
+  const { root } = await read($, repo)
+  const base = c.parents[0] ?? EMPTY_TREE
+  const [meta, names, nums] = await Promise.all([
+    git($, root, ['show', '-s', '--date=format:%Y-%m-%d %H:%M', '--format=%ad%x1f%b', c.hash]),
+    git($, root, ['diff', '-M', '--name-status', '-z', base, c.hash]),
+    git($, root, ['diff', '-M', '--numstat', '-z', base, c.hash]),
+  ])
+  const [date = '', body = ''] = (meta ?? '').split('\x1f')
+  const detail: CommitDetail = {
+    date: date.trim(),
+    body: body
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean),
+    files: parseChanges(names ?? '', nums ?? ''),
+  }
+  if (meta !== undefined && names !== undefined && nums !== undefined) remember(details, c.hash, detail)
+
+  return detail
+}
+
+async function worktreeDiff($: EngineInterface, root: string, f: FileChange): Promise<string | undefined> {
+  if (f.status !== '?') {
+    return git($, root, [
+      'diff',
+      '-M',
+      '--no-color',
+      '--no-ext-diff',
+      '-U3',
+      'HEAD',
+      '--',
+      ...(f.from ? [f.from] : []),
+      f.path,
+    ])
+  }
+  const r = await $.process
+    .run(['git', 'diff', '--no-index', '--no-color', '--no-ext-diff', '--', '/dev/null', f.path], {
+      cwd: root,
+      timeoutMs: SCAN_TIMEOUT_MS,
+    })
+    .catch(() => undefined)
+
+  return r && r.exitCode <= 1 ? r.stdout : undefined
+}
+
+const diffKey = (c: Commit, path: string) => `${c.hash}:${path}${c.hash === WORKTREE ? `@${worktreeGen}` : ''}`
+
+async function loadDiff($: EngineInterface, c: Commit, f: FileChange): Promise<DiffLine[]> {
+  const key = diffKey(c, f.path)
+  const known = diffs.get(key)
+  if (known) return known
+  const { root } = await read($, repo)
+  const out =
+    c.hash === WORKTREE
+      ? await worktreeDiff($, root, f)
+      : await git($, root, [
+          'diff',
+          '-M',
+          '--no-color',
+          '--no-ext-diff',
+          '-U3',
+          c.parents[0] ?? EMPTY_TREE,
+          c.hash,
+          '--',
+          ...(f.from ? [f.from] : []),
+          f.path,
+        ])
+  if (out === undefined) return [{ kind: 'note', text: '差分を取得できませんでした' }]
+  const lines = parseDiff(out, DIFF_LIMIT)
+  const result: DiffLine[] = lines.length > 0 ? lines : [{ kind: 'note', text: '表示できる差分がありません' }]
+  remember(diffs, key, result)
+
+  return result
+}
+
+async function currentFile($: EngineInterface, files: FileChange[]): Promise<FileChange | undefined> {
+  const path = await read($, gitFile)
+
+  return files.find((f) => f.path === path) ?? files[0]
+}
+
+async function selectCommit($: EngineInterface, rows: LogRow[], c: Commit) {
+  await update($, gitCommit, () => c.hash)
+  await update($, gitFile, () => '')
+  await update($, gitDiffTop, () => 0)
+  const at = rows.findIndex((r) => r.commit?.hash === c.hash)
+  await update($, gitTop, (top) => (at < top ? at : at >= top + graphRows ? at - graphRows + 1 : top))
+}
+
+async function moveCommit($: EngineInterface, by: number) {
+  const rows = await loadLog($)
+  const list = commitsOf(rows)
+  const cur = await currentCommit($, rows)
+  const at = list.findIndex((c) => c === cur)
+  const next = list[Math.max(0, Math.min(list.length - 1, at + by))]
+  if (next) await selectCommit($, rows, next)
+}
+
+async function moveFile($: EngineInterface, by: number) {
+  const c = await currentCommit($, await loadLog($))
+  if (!c) return
+  const { files } = await loadDetail($, c)
+  const cur = await currentFile($, files)
+  const next = files[Math.max(0, Math.min(files.length - 1, (cur ? files.indexOf(cur) : 0) + by))]
+  if (!next) return
+  await update($, gitFile, () => next.path)
+  await update($, gitDiffTop, () => 0)
+}
+
+async function zoomDiff($: EngineInterface) {
+  await update($, gitFocus, () => 'diff')
+  await update($, mode, () => 'git-diff')
+}
+
+async function scrollDiff($: EngineInterface, to: (top: number, total: number) => number) {
+  const c = await currentCommit($, await loadLog($))
+  if (!c) return
+  const f = await currentFile($, (await loadDetail($, c)).files)
+  if (!f) return
+  const total = (await loadDiff($, c, f)).length
+  await update($, gitDiffTop, (top) => Math.max(0, Math.min(to(top, total), total - diffBodyRows)))
+}
+
+const FOCUS_ORDER: GitFocus[] = ['graph', 'files', 'diff']
+
+async function currentFocus($: EngineInterface): Promise<GitFocus> {
+  const focus = await read($, gitFocus)
+
+  return isSplit && focus === 'diff' ? 'files' : focus
+}
+
+async function gitKey($: EngineInterface, k: Extract<ViewMessage, { t: 'key' }>['k']) {
+  const view = await read($, mode)
+  if (k === 'git') return update($, mode, () => 'tree')
+  if (k === 'refresh') {
+    logCache = undefined
+    await refresh($)
+    return $.ui.invalidate('ui.render')
+  }
+  if (k === 'next') return moveFile($, 1)
+  if (k === 'prev') return moveFile($, -1)
+  if (k === 'next-commit') return moveCommit($, 1)
+  if (k === 'prev-commit') return moveCommit($, -1)
+  if (view === 'git-diff' && (k === 'close' || k === 'space' || k === 'left')) return update($, mode, () => 'git')
+  if (k === 'close') return update($, mode, () => 'tree')
+  const focus = view === 'git-diff' ? 'diff' : await currentFocus($)
+  if (k === 'tab') {
+    const order = isSplit ? FOCUS_ORDER.slice(0, 2) : FOCUS_ORDER
+    return update($, gitFocus, () => order[(order.indexOf(focus) + 1) % order.length] ?? 'graph')
+  }
+  if (k === 'space') return focus === 'graph' ? update($, gitFocus, () => 'files') : zoomDiff($)
+  const rows = focus === 'graph' ? graphRows : focus === 'diff' ? diffBodyRows : fileRows
+  const half = Math.max(1, Math.floor(rows / 2))
+  const step: Partial<Record<typeof k, number>> = {
+    down: 1,
+    up: -1,
+    pagedown: half,
+    pageup: -half,
+    home: -DIFF_LIMIT,
+    end: DIFF_LIMIT,
+  }
+  const by = step[k]
+  if (by === undefined) return
+  if (focus === 'graph') return moveCommit($, by)
+  if (focus === 'files') return moveFile($, by)
+
+  return scrollDiff($, (top) => top + by)
+}
+
+async function gitScroll($: EngineInterface, by: number) {
+  const focus = (await read($, mode)) === 'git-diff' ? 'diff' : await currentFocus($)
+  if (focus === 'graph') return moveCommit($, by)
+  if (focus === 'files') return moveFile($, by)
+
+  return scrollDiff($, (top) => top + by)
+}
+
+async function gitClick($: EngineInterface, p: string) {
+  if (p === 'back') return update($, mode, () => 'git')
+  if (p === 'zoom') return zoomDiff($)
+  if (p.startsWith('f:')) {
+    await update($, gitFocus, () => 'files')
+    await update($, gitFile, () => p.slice(2))
+    return update($, gitDiffTop, () => 0)
+  }
+  if (!p.startsWith('c:')) return
+  const rows = await loadLog($)
+  const c = commitsOf(rows).find((x) => x.hash === p.slice(2))
+  if (!c) return
+  await update($, gitFocus, () => 'graph')
+  await selectCommit($, rows, c)
+}
+
+async function gitBody(
+  $: EngineInterface,
+  snap: RepoSnapshot,
+  cols: number,
+  height: number | undefined,
+  split: boolean,
+): Promise<ViewRow[]> {
+  const note = (text: string): ViewRow[] => [{ p: '', s: [[' ' + text, MUTED_COLOR, 0]] }]
+  if (!snap.isGit) return note('git リポジトリではありません')
+  const rows = await loadLog($)
+  const c = await currentCommit($, rows)
+  if (!c) return note('コミットがありません')
+  const detail = await loadDetail($, c)
+  const file = await currentFile($, detail.files)
+  const view = await read($, mode)
+  const diffBody = async () => {
+    if (!file) return []
+    const key = diffKey(c, file.path)
+    if (drawnDiff?.key !== key || drawnDiff.cols !== cols) {
+      drawnDiff = { key, cols, rows: diffRows(await loadDiff($, c, file), langOf(file.path), cols) }
+    }
+
+    return drawnDiff.rows
+  }
+  const window = async (body: ViewRow[], room: number) => {
+    diffBodyRows = room
+    const top = Math.max(0, Math.min(await read($, gitDiffTop), body.length - room))
+    const range = body.length === 0 ? '0/0' : `${top + 1}-${Math.min(body.length, top + room)}/${body.length}`
+
+    return { shown: body.slice(top, top + room), range }
+  }
+
+  if (view === 'git-diff') {
+    if (!file) return [{ p: 'back', s: [[' ‹ 変更ファイルがありません', MUTED_COLOR, 0]] }]
+    const body = await diffBody()
+    const { shown, range } = await window(body, height === undefined ? body.length : Math.max(1, height - 3))
+    const header = diffHeader(c, file, {
+      cols,
+      index: detail.files.indexOf(file),
+      total: detail.files.length,
+      range,
+    })
+
+    return [...header, ...shown]
+  }
+
+  isSplit = split
+  const focus = await currentFocus($)
+  const now = await $.clock.now()
+  const max = Math.max(1, ...detail.files.map((f) => f.added + f.deleted))
+  const info = detailRows(c, detail, cols, height === undefined ? 2 : 0)
+  const files = detail.files.map((f) => fileRow(f, { cols, max, isSelected: f === file, isFocused: focus === 'files' }))
+  if (c.parents.length > 1)
+    files.unshift({ p: '', s: [[`   first parent (${c.parents[0]?.slice(0, 7)}) との差分`, MUTED_COLOR, 0]] })
+  if (files.length === 0) files.push(...note('変更ファイルがありません'))
+  const shownCommits = height === undefined ? rows.slice(0, FALLBACK_COMMITS) : rows
+  const graphW = graphWidth(shownCommits)
+  const toRow = (r: LogRow) => commitRow(r, { cols, graphW, now, selected: c.hash, isFocused: focus === 'graph' })
+  const body = await diffBody()
+
+  if (height === undefined) {
+    const { shown, range } = await window(body, body.length)
+    const rule = file ? [diffRule(file, { cols, range, isFocused: false })] : []
+    return [...shownCommits.map(toRow), ...info, ...files, ...rule, ...shown]
+  }
+
+  const graphH = Math.max(3, Math.floor(split ? (height - info.length) * 0.55 : height * 0.3))
+  const fileRoom = split ? Math.max(2, height - graphH - info.length) : Math.max(2, Math.floor(height * 0.18))
+  const diffRoom = Math.max(1, height - graphH - info.length - fileRoom - 1)
+  graphRows = graphH
+  fileRows = fileRoom
+  const at = rows.findIndex((r) => r.commit?.hash === c.hash)
+  const stored = await read($, gitTop)
+  const top = Math.max(
+    0,
+    Math.min(at < stored ? at : at >= stored + graphH ? at - graphH + 1 : stored, rows.length - graphH),
+  )
+  const graph = rows.slice(top, top + graphH).map(toRow)
+  while (graph.length < graphH) graph.push({ p: '', s: [] })
+  const fileAt = file ? files.findIndex((r) => r.p === `f:${file.path}`) : 0
+  const fileTop = Math.max(0, Math.min(fileAt - fileRoom + 1, files.length - fileRoom))
+  const fileList = files.slice(fileTop, fileTop + fileRoom)
+  while (fileList.length < fileRoom) fileList.push({ p: '', s: [] })
+  if (split) return [...graph, ...info, ...fileList].slice(0, height)
+  const { shown, range } = await window(body, diffRoom)
+  const rule = file
+    ? diffRule(file, { cols, range, isFocused: focus === 'diff' })
+    : { p: '', s: [['─'.repeat(cols), GUIDE_COLOR, 0] as Seg] }
+
+  return [...graph, ...info, ...fileList, rule, ...shown].slice(0, height)
+}
+
 function openPane($: EngineInterface, isFocused: boolean) {
   return $.ui.open({ id: PANE, title: TITLE, ...(isFocused ? { focus: true as const } : {}) })
 }
@@ -340,6 +719,11 @@ export const register: Register = (on, options) => {
     await update($, previewTop, () => 0)
     await update($, selected, () => '')
     await update($, scrollTop, () => 0)
+    await update($, gitCommit, () => '')
+    await update($, gitFile, () => '')
+    await update($, gitFocus, () => 'graph')
+    await update($, gitTop, () => 0)
+    await update($, gitDiffTop, () => 0)
     const opened = await openPane($, true)
 
     return { text: opened.isPlaced ? 'Explorer を開きました。' : `Explorer を開けませんでした: ${opened.reason}` }
@@ -368,6 +752,10 @@ export const register: Register = (on, options) => {
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
     const view = await read($, mode)
     if (!drawsOwnWindow || view === 'find') return next(e)
+    if (isGitView(view)) {
+      await gitScroll($, e.by)
+      return {}
+    }
     if (view === 'preview') {
       await scrollPreview($, (top) => top + e.by)
       return {}
@@ -381,7 +769,7 @@ export const register: Register = (on, options) => {
   on('ui.message', async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
     const m = e.data as ViewMessage
-    if (m.t === 'click') await click($, m.p, m.dbl)
+    if (m.t === 'click') await (isGitView(await read($, mode)) ? gitClick($, m.p) : click($, m.p, m.dbl))
     else if (m.t === 'menu') await update($, selected, () => m.p)
     else if (m.t === 'close-find') await update($, mode, () => 'tree')
     else if (m.t === 'copy-abs' || m.t === 'copy-rel') await copyPath($, m.p, m.t === 'copy-abs')
@@ -412,10 +800,10 @@ export const register: Register = (on, options) => {
       .filter(Boolean)
       .join(' ')
     const segText = (segs: Seg[], bg?: string) =>
-      segs.map(([text, color, flags]) => (
+      segs.map(([text, color, flags, segBg]) => (
         <Text
           color={color ?? undefined}
-          backgroundColor={bg}
+          backgroundColor={segBg ?? bg}
           bold={(flags & BOLD) !== 0}
           dimColor={(flags & DIM) !== 0}
           strikethrough={(flags & STRIKE) !== 0}
@@ -424,12 +812,62 @@ export const register: Register = (on, options) => {
         </Text>
       ))
 
+    const isGit = isGitView(view)
     const header = (
       <Box flexDirection="column">
         <Text dimColor bold>
           {' EXPLORER'}
         </Text>
         <Text bold>{' ' + clip(snap.name.toUpperCase(), cols - 2)}</Text>
+      </Box>
+    )
+    const gitHeader = async () => {
+      const count = commitsOf(await loadLog($)).length
+      const total = count >= LOG_LIMIT ? `${LOG_LIMIT}+` : String(count)
+
+      return (
+        <Box flexDirection="column">
+          <Text dimColor bold>
+            {' GIT'}
+          </Text>
+          <Text>
+            <Text color={BRANCH_COLOR}>{' ⎇ ' + clip(snap.branch || 'no git', 24)}</Text>
+            {sync ? <Text color={BRANCH_COLOR}>{' ' + sync}</Text> : ''}
+            <Text dimColor>{snap.isGit ? `  · ${total} commits` : ''}</Text>
+          </Text>
+        </Box>
+      )
+    }
+    const gitFooter = (
+      <Box flexDirection="column">
+        <Text dimColor>{'─'.repeat(cols)}</Text>
+        {view === 'git-diff' ? (
+          <Box flexDirection="row" columnGap={2} paddingLeft={1}>
+            <Button key="git-back" plain hotkey="q" onPress={() => void update($, mode, () => 'git')}>
+              戻る
+            </Button>
+            <Button key="git-close" plain hotkey="g" onPress={() => void update($, mode, () => 'tree')}>
+              閉じる
+            </Button>
+            <Button key="git-next" plain hotkey="n" onPress={() => void moveFile($, 1)}>
+              次のファイル
+            </Button>
+            <Button key="git-prev" plain hotkey="p" onPress={() => void moveFile($, -1)}>
+              前のファイル
+            </Button>
+            <Text dimColor>j/k スクロール · Space 戻る</Text>
+          </Box>
+        ) : (
+          <Box flexDirection="row" columnGap={2} paddingLeft={1}>
+            <Button key="git-close" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
+              閉じる
+            </Button>
+            <Button key="git-refresh" plain hotkey="r" onPress={() => void gitKey($, 'refresh')}>
+              更新
+            </Button>
+            <Text dimColor>j/k 移動 · Tab 切替 · Space 開く</Text>
+          </Box>
+        )}
       </Box>
     )
     const status = (
@@ -453,6 +891,7 @@ export const register: Register = (on, options) => {
       ['collapse', 'c', 'すべて閉じる', () => void setExpanded($, () => [])],
       ['expand', 'x', 'すべて開く', () => void setExpanded($, () => allDirs(index))],
       ['refresh', 'r', '更新', () => void refresh($)],
+      ['git', 'g', 'Git', () => void update($, mode, () => 'git')],
     ]
     const toolLines: (typeof tools)[] = [[]]
     let used = 1
@@ -567,10 +1006,25 @@ export const register: Register = (on, options) => {
       const top = height === undefined ? 0 : Math.max(0, Math.min(await read($, previewTop), total - height))
       let source = ''
       let shown = 0
-      for (const line of file.lines.slice(top, height === undefined ? undefined : top + height)) {
-        if (source.length + line.length + 1 > PREVIEW_CHARS) break
-        source += (shown > 0 ? '\n' : '') + line
-        shown++
+      const lines: Seg[][] = []
+      if (height === undefined) {
+        for (const line of file.lines) {
+          if (source.length + line.length + 1 > PREVIEW_CHARS) break
+          source += (shown > 0 ? '\n' : '') + line
+          shown++
+        }
+      } else {
+        const lang = langOf(rel)
+        const states = file.states
+        const at = (n: number) => file.lines[n]?.replace(/\t/g, '  ') ?? ''
+        for (let n = states.length - 1; n < top; n++) states.push(highlightLine(at(n), lang, states[n]).state)
+        const gutter = String(total).length
+        for (let n = top; n < Math.min(total, top + height); n++) {
+          const { segs, state } = highlightLine(at(n), lang, states[n])
+          if (states.length === n + 1) states.push(state)
+          lines.push([[String(n + 1).padStart(gutter) + ' ', MUTED_COLOR, 0], ...fit(segs, cols - gutter - 1)])
+        }
+        shown = lines.length
       }
       const range = total === 0 ? '0/0' : `${top + 1}-${top + shown}/${total}`
       const title = (
@@ -579,7 +1033,7 @@ export const register: Register = (on, options) => {
           <Text dimColor>{range + ' '}</Text>
         </Box>
       )
-      const data: PreviewView = { path: rel, source, startLine: top + 1, ...(file.error ? { error: file.error } : {}) }
+      const data: PreviewView = { lines, ...(file.error ? { error: file.error } : {}) }
       const actions = (
         <Box flexDirection="row" columnGap={2} paddingLeft={1}>
           <Button key="close-preview" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
@@ -592,7 +1046,7 @@ export const register: Register = (on, options) => {
         </Box>
       )
 
-      return { title, data, actions }
+      return { title, data, actions, source, rel }
     }
 
     const rows = flatten(index, new Set(await read($, expanded)), ROW_LIMIT)
@@ -613,6 +1067,22 @@ export const register: Register = (on, options) => {
       treeRows = treeRowsNow
       const isFinding = view === 'find'
       const top = Math.max(0, Math.min(await read($, scrollTop), rows.length - treeRows))
+
+      if (isGit) {
+        const height = Math.max(3, bodyRows - HEAD_ROWS - 2)
+        const split = e.props.placement !== 'dock' || height < COMBINED_MIN_ROWS
+        const props: ViewProps = { rows: await gitBody($, snap, cols, height, split), cols, height, git: true }
+
+        return (
+          <Box flexDirection="column" height={bodyRows}>
+            {await gitHeader()}
+            <Box height={height} width={cols}>
+              <Client key="tree" module="../src/tree-view.tsx" props={props} height={height} width={cols} />
+            </Box>
+            {gitFooter}
+          </Box>
+        )
+      }
 
       if (view === 'preview') {
         previewRows = Math.max(1, bodyRows - 2)
@@ -663,8 +1133,26 @@ export const register: Register = (on, options) => {
 
     drawsOwnWindow = false
 
+    if (isGit) {
+      return (
+        <Box flexDirection="column">
+          {await gitHeader()}
+          {(await gitBody($, snap, cols, undefined, false)).map((row, i) =>
+            row.p === '' ? (
+              <Box flexDirection="row">{segText(row.s, row.bg)}</Box>
+            ) : (
+              <Button key={`${row.p}:${i}`} plain onPress={() => void gitClick($, row.p)}>
+                {segText(row.s, row.bg)}
+              </Button>
+            ),
+          )}
+          {gitFooter}
+        </Box>
+      )
+    }
+
     if (view === 'preview') {
-      const { title, data, actions } = await previewPanel(undefined)
+      const { title, data, actions, source, rel } = await previewPanel(undefined)
 
       return (
         <Box flexDirection="column">
@@ -672,7 +1160,7 @@ export const register: Register = (on, options) => {
           {data.error ? (
             <Text dimColor>{' ' + data.error}</Text>
           ) : (
-            <Code source={data.source} path={data.path} startLine={1} wrap="truncate-end" />
+            <Code source={source} path={rel} startLine={1} wrap="truncate-end" />
           )}
           {actions}
         </Box>

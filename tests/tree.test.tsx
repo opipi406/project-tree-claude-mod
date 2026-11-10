@@ -2,7 +2,11 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, On } from 'claude-code'
 
 import { search } from '../src/fuzzy'
+import { highlightLine, langOf } from '../src/highlight'
+import type { HlState } from '../src/highlight'
 import { parseStatus } from '../src/git'
+import { parseChanges, parseDiff, parseLog, withWorktree } from '../src/gitlog'
+import { diffRows } from '../src/git-view'
 import { buildIndex, flatten } from '../src/tree'
 import { formatRow } from '../src/view'
 
@@ -26,6 +30,96 @@ test('tree connectors continue a parent line only while the parent has later sib
 test('a basename match outranks a match spread over the path', async () => {
   const hits = search(['src/regiser/tree.ts', 'hooks/register.tsx'], 'reg', 10)
   expect(hits[0]?.path).toBe('hooks/register.tsx')
+})
+
+test('the language comes from the path, and a block comment or triple-quoted string carries over lines', async () => {
+  const cases: [string, string[], (string | null)[]][] = [
+    ['a.ts', ['/* open', 'still */ let x'], ['#6a9955', '#6a9955']],
+    ['c.py', ['"""doc', 'end""" + x'], ['#ce9178', '#ce9178']],
+    ['Dockerfile', ['FROM node'], ['#569cd6']],
+    ['x.unknown', ['const a'], [null]],
+  ]
+  for (const [path, lines, colors] of cases) {
+    let state: HlState
+    const got = lines.map((line) => {
+      const r = highlightLine(line, langOf(path), state)
+      state = r.state
+      return r.segs[0]?.[1] ?? null
+    })
+    expect([path, ...got]).toEqual([path, ...colors])
+  }
+})
+
+test('git log --graph: connector lines stay as rows, commit fields split, a remote HEAD ref is dropped', async () => {
+  const f = (...x: string[]) => '\x1f' + x.join('\x1f')
+  const out = [
+    '*   ' + f('m1', 'm1', 'p1 s1', 'ann', '100', 'HEAD -> refs/heads/main, refs/remotes/origin/HEAD', 'Merge x'),
+    '|\\  ',
+    '| * ' + f('s1', 's1', 'p1', 'bob', '90', '', 'fix: a'),
+    '',
+  ].join('\n')
+  const rows = parseLog(out)
+  expect(rows.map((r) => [r.graph, r.commit?.hash ?? null])).toEqual([
+    ['*', 'm1'],
+    ['|\\', null],
+    ['| *', 's1'],
+  ])
+  expect(rows[0]?.commit?.parents).toEqual(['p1', 's1'])
+  expect(rows[0]?.commit?.refs).toEqual(['HEAD -> refs/heads/main'])
+})
+
+test('uncommitted changes sit above HEAD in its column, the gray edge drawn only through empty cells', async () => {
+  const row = (graph: string, hash: string, refs: string[] = []) => ({
+    graph,
+    commit: { hash, short: hash, parents: [], author: '', time: 0, refs, subject: '' },
+  })
+  const rows = [row('*', 'tip'), row('| *', 'head', ['HEAD -> refs/heads/topic']), row('* |', 'base')]
+  expect(withWorktree(rows, true).map((r) => [r.graph, r.commit?.hash])).toEqual([
+    ['  *', 'WORKTREE'],
+    ['* :', 'tip'],
+    ['| *', 'head'],
+    ['* |', 'base'],
+  ])
+  expect(withWorktree(rows, false)).toBe(rows)
+})
+
+test('changed files: a rename consumes two paths in both -z lists, and "-" counts mark a binary file', async () => {
+  const names = ['R087', 'old.ts', 'new.ts', 'M', 'img.png', 'A', 'b.md', ''].join('\0')
+  const nums = ['3\t1\t', 'old.ts', 'new.ts', '-\t-\timg.png', '5\t0\tb.md', ''].join('\0')
+  expect(parseChanges(names, nums)).toEqual([
+    { status: 'R', from: 'old.ts', path: 'new.ts', added: 3, deleted: 1, isBinary: false },
+    { status: 'M', path: 'img.png', added: 0, deleted: 0, isBinary: true },
+    { status: 'A', path: 'b.md', added: 5, deleted: 0, isBinary: false },
+  ])
+})
+
+test('a diff numbers each side on its own and marks only the changed middle of a replaced line', async () => {
+  const out = [
+    'diff --git a/x b/x',
+    '--- a/x',
+    '+++ b/x',
+    '@@ -10,3 +10,3 @@ fn',
+    ' keep',
+    '-const a = 1',
+    '+const a = 22',
+    ' end',
+  ].join('\n')
+  const lines = parseDiff(out, 100)
+  expect(lines.map((l) => [l.kind, l.old ?? null, l.new ?? null, l.range ?? null])).toEqual([
+    ['hunk', null, null, null],
+    ['ctx', 10, 10, null],
+    ['del', 11, null, [10, 11]],
+    ['add', null, 11, [10, 12]],
+    ['ctx', 12, 12, null],
+  ])
+})
+
+test('a diff line wider than the pane wraps onto gutter-indented rows instead of being cut', async () => {
+  const text = 'abcdefghij'.repeat(4)
+  const rows = diffRows(parseDiff(['@@ -1 +1 @@', '+' + text].join('\n'), 100), undefined, 20)
+  const body = rows.slice(1).map((r) => r.s.map((x) => x[0]).join(''))
+  expect(body.map((line) => line.slice(0, 5))).toEqual([' 1 + ', '     ', '     '])
+  expect(body.map((line) => line.slice(5)).join('')).toBe(text)
 })
 
 const PANE = {
@@ -191,18 +285,18 @@ test('pressing o previews the selected file over the tree: highlighted by its pa
   on('fs.read', (_, e) => ({ value: e.path === '/r/src/a.ts' ? lines.join('\n') + '\n' : '' }))
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.key({ key: 'o' })
-  const code = await ui.find({ type: 'Code', in: 'tree' })
-  expect(code?.props).toMatchObject({ path: 'src/a.ts', startLine: 1 })
-  expect(String(code?.props.source).split('\n')[0]).toBe('const v1 = 1')
+  expect((await ui.find({ type: 'Text', text: 'const', in: 'tree' }))?.props.color).toBe('#569cd6')
   expect(await ui.find({ type: 'Text', text: /^1-28\/40 $/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: ' 1 ', in: 'tree' })).toBeTruthy()
   await ui.key({ key: 'j' })
-  expect((await ui.find({ type: 'Code', in: 'tree' }))?.props.startLine).toBe(2)
+  expect(await ui.find({ type: 'Text', text: ' 1 ', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: ' 2 ', in: 'tree' })).toBeTruthy()
   await ui.key({ key: 'q' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'const', in: 'tree' })).toBeUndefined()
   await ui.key({ key: 'o' })
   expect((await ui.find({ key: 'close-preview' }))?.props.hotkey).toBe('q')
   await ui.press({ key: 'close-preview' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'const', in: 'tree' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -215,9 +309,14 @@ test('running /project-tree again opens the plain tree, not the preview or selec
   await ui.key({ key: 'j' })
   await ui.key({ key: 'j' })
   await ui.key({ key: 'o' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeTruthy()
-  await $.command.run({ command: 'project-tree', args: '', origin: { kind: 'composer' } })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 ', in: 'tree' })).toBeTruthy()
+  await $.command.run({
+    command: 'project-tree',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  expect(await ui.find({ type: 'Text', text: '1 ', in: 'tree' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /b\.md/, in: 'tree' })).toBeTruthy()
   expect(JSON.stringify(await ui.drawn({ in: 'tree' }))).not.toContain('#04395e')
   await ui.unmount()
@@ -243,11 +342,14 @@ test('pressing O opens the selected file with its default app and names that app
   await ui.unmount()
 })
 
-test('vim keys move the selection: j down, G to the last row, gg back to the first', async ($, on) => {
+test('j/k move the selection, and g opens the Git view instead of jumping to the top', async ($, on) => {
   seed(on, { repo: REPO })
   const picks: unknown[] = []
+  const modes: unknown[] = []
   on('state.set', (_, e, next) => {
-    if ((e as { key: string }).key === 'selected') picks.push((e as { value: unknown }).value)
+    const { key, value } = e as { key: string; value: unknown }
+    if (key === 'selected') picks.push(value)
+    if (key === 'mode') modes.push(value)
     return next(e)
   })
   on('process.run', () => ({
@@ -256,10 +358,11 @@ test('vim keys move the selection: j down, G to the last row, gg back to the fir
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.key({ key: 'j' })
   await ui.key({ key: 'j' })
-  await ui.key({ key: 'g' })
-  await ui.key({ key: 'g' })
+  await ui.key({ key: 'k' })
   await ui.key({ key: 'G', shift: true })
-  expect(picks).toEqual(['src', 'b.md', 'src', 'b.md'])
+  await ui.key({ key: 'g' })
+  expect(picks).toEqual(['src', 'b.md', 'src'])
+  expect(modes).toEqual(['git'])
   await ui.unmount()
 })
 
@@ -318,4 +421,91 @@ test('a scan cut short by the machine sleeping logs nothing', async ($, on) => {
   await clock.settle()
   await clock.advance(600_000)
   expect(await started).toEqual([])
+})
+
+const LOG = [
+  '* ' + ['', 'c2', 'c2', 'c1', 'ann', '100', 'HEAD -> refs/heads/main', 'feat: two'].join('\x1f'),
+  '* ' + ['', 'c1', 'c1', '', 'ann', '90', '', 'feat: one'].join('\x1f'),
+  '',
+].join('\n')
+
+const DIFF = ['diff --git a/src/a.ts b/src/a.ts', '@@ -1,2 +1,2 @@', '-const x = 1', '+const x = 2', ' end', ''].join(
+  '\n',
+)
+
+function gitRepo(on: On) {
+  mock.clock(on, { now: 200_000 })
+  on('process.run', (_, e) => {
+    const args = e.argv.join(' ')
+    const stdout = args.startsWith('git log')
+      ? LOG
+      : args.startsWith('git show')
+        ? '2026-11-10 10:00\x1fbody line\n'
+        : args.includes('--name-status')
+          ? 'M\0src/a.ts\0'
+          : args.includes('--numstat')
+            ? '1\t1\tsrc/a.ts\0'
+            : args.startsWith('git diff')
+              ? DIFF
+              : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+}
+
+test("g shows the graph, the changed files and the selected file's diff at once; Space zooms the diff, Space returns", async ($, on) => {
+  seed(on, { repo: REPO })
+  gitRepo(on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.key({ key: 'g' })
+  expect(await ui.find({ type: 'Text', text: /^two$/, in: 'tree' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^a\.ts$/, in: 'tree' })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /^2$/, in: 'tree' }))?.props.backgroundColor).toBe('#22603a')
+  await ui.key({ key: 'return' })
+  expect(await ui.find({ type: 'Text', text: /^ ‹ $/, in: 'tree' })).toBeUndefined()
+  await ui.key({ key: ' ' })
+  await ui.key({ key: ' ' })
+  expect(await ui.find({ type: 'Text', text: /^ ‹ $/, in: 'tree' })).toBeTruthy()
+  await ui.key({ key: ' ' })
+  expect(await ui.find({ type: 'Text', text: /^ ‹ $/, in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^two$/, in: 'tree' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('placed inline above the prompt, the Git view leaves the diff out until Space on a file fills the pane with it', async ($, on) => {
+  seed(on, { repo: REPO })
+  gitRepo(on)
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, placement: 'inline' }, surface: 'terminal' })
+  await ui.key({ key: 'g' })
+  expect(await ui.find({ type: 'Text', text: /^a\.ts$/, in: 'tree' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^2$/, in: 'tree' })).toBeUndefined()
+  await ui.key({ key: ' ' })
+  await ui.key({ key: ' ' })
+  expect(await ui.find({ type: 'Text', text: /^ ‹ $/, in: 'tree' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^2$/, in: 'tree' })).toBeTruthy()
+  await ui.key({ key: 'q' })
+  expect(await ui.find({ type: 'Text', text: /^2$/, in: 'tree' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a dirty working tree shows first as the selected "working" entry, its files diffed against HEAD', async ($, on) => {
+  seed(on, { repo: REPO, mode: 'git' })
+  gitRepo(on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /^◌$/, in: 'tree' }))?.props.color).toBe('#7f848e')
+  const drawn = JSON.stringify(await ui.drawn({ in: 'tree' }))
+  expect(drawn).toContain('未コミットの変更')
+  expect(drawn).toContain('parent c2')
+  expect((await ui.find({ type: 'Text', text: /^2$/, in: 'tree' }))?.props.backgroundColor).toBe('#22603a')
+  await ui.unmount()
+})
+
+test('clicking a commit in the graph shows that commit in the detail below', async ($, on) => {
+  seed(on, { repo: REPO, mode: 'git' })
+  gitRepo(on)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'c2', in: 'tree' })).toBeTruthy()
+  await ui.pointer({ type: 'down', x: 5, y: 2, button: 'left' })
+  const drawn = JSON.stringify(await ui.drawn({ in: 'tree' }))
+  expect(drawn).toContain('root commit')
+  await ui.unmount()
 })
