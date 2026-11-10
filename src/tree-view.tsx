@@ -62,7 +62,7 @@ const KEYS: Record<string, Move | 'enter'> = {
 }
 
 const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
-  const { Box, Text, Code } = surface.elements
+  const { Box, Text } = surface.elements
   const st: Local = surface.state ?? {}
   const send = (m: ViewMessage) => surface.post(m)
   const menu = st.menu
@@ -163,7 +163,15 @@ const TreeView: ClientModule<ViewProps, Local> = (props, surface) => {
         {preview.error ? (
           <Text dimColor>{' ' + preview.error}</Text>
         ) : (
-          <Code source={preview.source} path={preview.path} startLine={preview.startLine} wrap="truncate-end" />
+          preview.lines.map((line) => (
+            <Box flexDirection="row">
+              {line.map(([text, color, flags]) => (
+                <Text color={color ?? undefined} bold={(flags & BOLD) !== 0}>
+                  {text}
+                </Text>
+              ))}
+            </Box>
+          ))
         )}
       </Box>
     )

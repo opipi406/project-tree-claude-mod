@@ -4,10 +4,12 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { GitCode, IconStyle, RepoSnapshot, ViewMode } from '../types'
 import { isSame, scan } from '../src/git'
 import { search } from '../src/fuzzy'
+import { fit, highlightLine, langOf } from '../src/highlight'
+import type { HlState } from '../src/highlight'
 import { GIT_COLORS, clip, fileIcon, width } from '../src/icons'
 import { allDirs, ancestors, basename, buildIndex, dirStatuses, flatten } from '../src/tree'
 import type { Index, Row } from '../src/tree'
-import { BOLD, DIM, STRIKE, formatRow } from '../src/view'
+import { BOLD, DIM, MUTED_COLOR, STRIKE, formatRow } from '../src/view'
 import type { PreviewView, Seg, ViewMessage, ViewProps, ViewRow } from '../src/view'
 
 const PANE = 'project-tree'
@@ -56,7 +58,7 @@ let pending: { cancel: () => void } | undefined
 let cached: { rev: number; root: string; index: Index; dirCodes: Map<string, GitCode> } | undefined
 let treeRows = 20
 let previewRows = 20
-let loaded: { path: string; mtimeMs: number; lines: string[]; error?: string } | undefined
+let loaded: { path: string; mtimeMs: number; lines: string[]; states: HlState[]; error?: string } | undefined
 let drawsOwnWindow = false
 
 function indexOf(snap: RepoSnapshot) {
@@ -198,7 +200,7 @@ async function openWithDefaultApp($: EngineInterface, rel: string) {
 async function loadPreview($: EngineInterface, abs: string) {
   const info = await $.fs.stat(abs).catch(() => undefined)
   if (loaded?.path === abs && loaded.mtimeMs === info?.mtimeMs) return loaded
-  const fail = (error: string) => (loaded = { path: abs, mtimeMs: info?.mtimeMs ?? 0, lines: [], error })
+  const fail = (error: string) => (loaded = { path: abs, mtimeMs: info?.mtimeMs ?? 0, lines: [], states: [], error })
   if (!info) return fail('ファイルが見つかりません')
   const text = await $.fs.read(abs).catch((err: unknown) => err)
   if (typeof text !== 'string') return fail(`読み込めませんでした: ${String(text)}`)
@@ -206,6 +208,7 @@ async function loadPreview($: EngineInterface, abs: string) {
   loaded = {
     path: abs,
     mtimeMs: info.mtimeMs,
+    states: [undefined],
     lines: text
       .replace(/\p{Cc}/gu, (c) => (c === '\t' || c === '\n' ? c : ''))
       .replace(/\n$/, '')
@@ -567,10 +570,25 @@ export const register: Register = (on, options) => {
       const top = height === undefined ? 0 : Math.max(0, Math.min(await read($, previewTop), total - height))
       let source = ''
       let shown = 0
-      for (const line of file.lines.slice(top, height === undefined ? undefined : top + height)) {
-        if (source.length + line.length + 1 > PREVIEW_CHARS) break
-        source += (shown > 0 ? '\n' : '') + line
-        shown++
+      const lines: Seg[][] = []
+      if (height === undefined) {
+        for (const line of file.lines) {
+          if (source.length + line.length + 1 > PREVIEW_CHARS) break
+          source += (shown > 0 ? '\n' : '') + line
+          shown++
+        }
+      } else {
+        const lang = langOf(rel)
+        const states = file.states
+        const at = (n: number) => file.lines[n]?.replace(/\t/g, '  ') ?? ''
+        for (let n = states.length - 1; n < top; n++) states.push(highlightLine(at(n), lang, states[n]).state)
+        const gutter = String(total).length
+        for (let n = top; n < Math.min(total, top + height); n++) {
+          const { segs, state } = highlightLine(at(n), lang, states[n])
+          if (states.length === n + 1) states.push(state)
+          lines.push([[String(n + 1).padStart(gutter) + ' ', MUTED_COLOR, 0], ...fit(segs, cols - gutter - 1)])
+        }
+        shown = lines.length
       }
       const range = total === 0 ? '0/0' : `${top + 1}-${top + shown}/${total}`
       const title = (
@@ -579,7 +597,7 @@ export const register: Register = (on, options) => {
           <Text dimColor>{range + ' '}</Text>
         </Box>
       )
-      const data: PreviewView = { path: rel, source, startLine: top + 1, ...(file.error ? { error: file.error } : {}) }
+      const data: PreviewView = { lines, ...(file.error ? { error: file.error } : {}) }
       const actions = (
         <Box flexDirection="row" columnGap={2} paddingLeft={1}>
           <Button key="close-preview" plain hotkey="q" onPress={() => void update($, mode, () => 'tree')}>
@@ -592,7 +610,7 @@ export const register: Register = (on, options) => {
         </Box>
       )
 
-      return { title, data, actions }
+      return { title, data, actions, source, rel }
     }
 
     const rows = flatten(index, new Set(await read($, expanded)), ROW_LIMIT)
@@ -664,7 +682,7 @@ export const register: Register = (on, options) => {
     drawsOwnWindow = false
 
     if (view === 'preview') {
-      const { title, data, actions } = await previewPanel(undefined)
+      const { title, data, actions, source, rel } = await previewPanel(undefined)
 
       return (
         <Box flexDirection="column">
@@ -672,7 +690,7 @@ export const register: Register = (on, options) => {
           {data.error ? (
             <Text dimColor>{' ' + data.error}</Text>
           ) : (
-            <Code source={data.source} path={data.path} startLine={1} wrap="truncate-end" />
+            <Code source={source} path={rel} startLine={1} wrap="truncate-end" />
           )}
           {actions}
         </Box>

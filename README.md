@@ -117,6 +117,7 @@ src/tree-view.tsx    ツリーの描画と入力（ターミナル）
 src/tree.ts          ファイル一覧 → ツリー
 src/git.ts           git の走査と状態
 src/fuzzy.ts         あいまい検索
+src/highlight.ts     プレビューのシンタックスハイライト
 src/view.ts          行の書式
 src/icons.ts         アイコンと色
 types/index.d.ts     状態の型定義

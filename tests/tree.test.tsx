@@ -2,6 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, On } from 'claude-code'
 
 import { search } from '../src/fuzzy'
+import { highlightLine, langOf } from '../src/highlight'
+import type { HlState } from '../src/highlight'
 import { parseStatus } from '../src/git'
 import { buildIndex, flatten } from '../src/tree'
 import { formatRow } from '../src/view'
@@ -26,6 +28,24 @@ test('tree connectors continue a parent line only while the parent has later sib
 test('a basename match outranks a match spread over the path', async () => {
   const hits = search(['src/regiser/tree.ts', 'hooks/register.tsx'], 'reg', 10)
   expect(hits[0]?.path).toBe('hooks/register.tsx')
+})
+
+test('the language comes from the path, and a block comment or triple-quoted string carries over lines', async () => {
+  const cases: [string, string[], (string | null)[]][] = [
+    ['a.ts', ['/* open', 'still */ let x'], ['#6a9955', '#6a9955']],
+    ['c.py', ['"""doc', 'end""" + x'], ['#ce9178', '#ce9178']],
+    ['Dockerfile', ['FROM node'], ['#569cd6']],
+    ['x.unknown', ['const a'], [null]],
+  ]
+  for (const [path, lines, colors] of cases) {
+    let state: HlState
+    const got = lines.map((line) => {
+      const r = highlightLine(line, langOf(path), state)
+      state = r.state
+      return r.segs[0]?.[1] ?? null
+    })
+    expect([path, ...got]).toEqual([path, ...colors])
+  }
 })
 
 const PANE = {
@@ -191,18 +211,18 @@ test('pressing o previews the selected file over the tree: highlighted by its pa
   on('fs.read', (_, e) => ({ value: e.path === '/r/src/a.ts' ? lines.join('\n') + '\n' : '' }))
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.key({ key: 'o' })
-  const code = await ui.find({ type: 'Code', in: 'tree' })
-  expect(code?.props).toMatchObject({ path: 'src/a.ts', startLine: 1 })
-  expect(String(code?.props.source).split('\n')[0]).toBe('const v1 = 1')
+  expect((await ui.find({ type: 'Text', text: 'const', in: 'tree' }))?.props.color).toBe('#569cd6')
   expect(await ui.find({ type: 'Text', text: /^1-28\/40 $/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: ' 1 ', in: 'tree' })).toBeTruthy()
   await ui.key({ key: 'j' })
-  expect((await ui.find({ type: 'Code', in: 'tree' }))?.props.startLine).toBe(2)
+  expect(await ui.find({ type: 'Text', text: ' 1 ', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: ' 2 ', in: 'tree' })).toBeTruthy()
   await ui.key({ key: 'q' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'const', in: 'tree' })).toBeUndefined()
   await ui.key({ key: 'o' })
   expect((await ui.find({ key: 'close-preview' }))?.props.hotkey).toBe('q')
   await ui.press({ key: 'close-preview' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'const', in: 'tree' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -215,9 +235,14 @@ test('running /project-tree again opens the plain tree, not the preview or selec
   await ui.key({ key: 'j' })
   await ui.key({ key: 'j' })
   await ui.key({ key: 'o' })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeTruthy()
-  await $.command.run({ command: 'project-tree', args: '', origin: { kind: 'composer' } })
-  expect(await ui.find({ type: 'Code', in: 'tree' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 ', in: 'tree' })).toBeTruthy()
+  await $.command.run({
+    command: 'project-tree',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  expect(await ui.find({ type: 'Text', text: '1 ', in: 'tree' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /b\.md/, in: 'tree' })).toBeTruthy()
   expect(JSON.stringify(await ui.drawn({ in: 'tree' }))).not.toContain('#04395e')
   await ui.unmount()

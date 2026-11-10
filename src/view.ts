@@ -14,7 +14,7 @@ export type Seg = [string, string | null, number]
 
 export type ViewRow = { p: string; s: Seg[]; sel?: true }
 
-export type PreviewView = { path: string; source: string; startLine: number; error?: string }
+export type PreviewView = { lines: Seg[][]; error?: string }
 
 export type ViewProps = { rows: ViewRow[]; cols: number; height: number; dim?: true; preview?: PreviewView }
 
